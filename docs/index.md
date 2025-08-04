@@ -1,6 +1,6 @@
 # cpiVAE: Cross-platform Proteomics Imputation using Variational Autoencoders
 
-Welcome to the comprehensive documentation for **cpiVAE**, a state-of-the-art framework for cross-platform proteomics data imputation using Variational Autoencoders.
+Welcome to the comprehensive documentation for **cpiVAE**, a highly customizable and user friendly framework for cross-platform proteomics data imputation using Variational Autoencoders.
 
 ## Overview
 
@@ -8,11 +8,11 @@ cpiVAE addresses the critical challenge of data harmonization in proteomics rese
 
 ## Key Features
 
-- **Multi-Architecture Support**: Joint VAE, VAE+, VampPrior, IWAE, VQ-VAE, and more
+- **Multi-Architecture Support**: Joint VAE, VampPrior, IWAE, VQ-VAE, and easy addition of custom models
 - **Robust Baseline Methods**: KNN and WNN implementations for comparison
 - **Comprehensive Evaluation**: Feature importance analysis and quality control metrics
 - **Production Ready**: PyTorch Lightning framework with full experiment tracking
-- **Flexible Configuration**: YAML-based configuration system for easy customization
+- **Flexible Configuration**: YAML-based configuration setup for easy customization
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ Get started with cpiVAE in three simple steps:
 
 | Section | Description |
 |---------|-------------|
-| [**Training**](train.md) | Complete guide to model training with PyTorch Lightning |
+| [**Training**](train.md) | Model training with PyTorch Lightning |
 | [**Baselines**](baselines.md) | KNN and WNN baseline implementations |
 | [**Imputation**](impute.md) | Cross-platform imputation pipeline |
 | [**Model Tuning**](tune.md) | Hyperparameter optimization and model selection |
@@ -61,7 +61,6 @@ cpiVAE employs a dual-encoder, dual-decoder architecture that learns platform-sp
 
 - **Multi-platform Studies**: Harmonize data across different proteomics platforms
 - **Data Integration**: Combine measurements from multiple cohorts or studies  
-- **Missing Data Recovery**: Impute missing proteins in incomplete panels
 - **Method Validation**: Compare measurement consistency across platforms
 
 ## Citation
@@ -69,22 +68,7 @@ cpiVAE employs a dual-encoder, dual-decoder architecture that learns platform-sp
 If you use cpiVAE in your research, please cite:
 
 ```bibtex
-@article{cpiVAE2024,
-  title={Cross-platform Proteomics Imputation using Variational Autoencoders},
-  author={[Author Names]},
-  journal={[Journal Name]},
-  year={2024}
-}
+TBD
 ```
 
-## Support
-
-For questions, issues, or contributions:
-
-- **GitHub Issues**: [Report bugs or request features](https://github.com/skysky2333/cpiVAE/issues)
-- **Discussions**: [Community discussions](https://github.com/skysky2333/cpiVAE/discussions)
-- **Documentation**: Browse the sections above for detailed guidance
-
 ---
-
-*cpiVAE is developed and maintained with a focus on reproducible research and practical applications in proteomics data analysis.*

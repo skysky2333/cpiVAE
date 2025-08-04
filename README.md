@@ -14,6 +14,8 @@ cpiVAE learns a shared latent representation across different proteomics platfor
 - **Feature importance analysis**: Integration with Captum for interpretability
 - **Hyperparameter optimization**: Bayesian optimization with Optuna
 
+Check the website for [full documentations](https://skysky2333.github.io/cpiVAE/).
+
 ## Quick Start
 
 ### Installation
@@ -71,7 +73,7 @@ python scripts/impute.py --input_data your_data.csv \
 - **Both platforms**: Log2 transformed and z-standardized feature-wise
 - **Features**: Must match those in `feature_names.pkl` (no missing features allowed)
 
-For optimal results, we recommend training and tuning your own model. See [full imputation documentation](docs/impute.md) for details.
+For optimal results, we recommend training and tuning your own model. See [full imputation documentation](https://skysky2333.github.io/cpiVAE/impute) for details.
 
 ### Complete Analysis Pipeline
 
@@ -91,15 +93,8 @@ This will:
 
 ## Documentation
 
-For detailed documentation of individual scripts, see the `docs/` directory:
-- [Hyperparameter Tuning](docs/tune.md)
-- [Model Training](docs/train.md)
-- [Cross-Platform Imputation](docs/impute.md)
-- [Baseline Methods](docs/baselines.md)
-- [Results Comparison](docs/comparison.md)
-- [Feature Importance Analysis](docs/feature_importance.md)
-- [Latent Space Analysis](docs/latent_space.md)
-- [Quality Control](docs/quality_control.md)
+For detailed documentation of individual scripts, please check out [https://skysky2333.github.io/cpiVAE/](https://skysky2333.github.io/cpiVAE/).
+
 
 
 
