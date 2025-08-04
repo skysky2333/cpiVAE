@@ -1,0 +1,79 @@
+# cpiVAE Configuration File
+
+# Model Architecture
+model:
+  model_type: "joint_vae"  # See options in src/models/__init__.py
+  latent_dim: 128
+  encoder_layers: [1024]  # Layer architecture for encoders
+  decoder_layers: [512]  # Layer architecture for decoders
+  activation: "leaky_relu" # Options: "relu", "leaky_relu", "gelu", "swish", "tanh", "elu"
+  dropout_rate: 0.15
+  batch_norm: true
+  use_residual_blocks: true  # Use ResMLP or regular MLP
+  
+# Training Parameters
+training:
+  max_epochs: 200
+  learning_rate: 0.0004
+  batch_size: 256
+  optimizer: "adamw"
+  scheduler: "reduce_on_plateau"
+  scheduler_patience: 5
+  scheduler_factor: 0.5
+  early_stopping_patience: 10
+  gradient_clip_val: 0.65
+  
+  # Data Augmentation
+  data_augmentation:
+    enabled: true
+    gaussian_noise_std: 0.4
+
+# Loss Function Weights
+loss_weights:
+  reconstruction: 0.9
+  kl_divergence: 0.00014
+  latent_alignment: 1.9
+  cross_reconstruction: 1.4
+  
+  # Alignment Loss Configuration
+  alignment_type: "mmd"  # Options: "mse", "kl_divergence", "mmd"
+
+# Data Processing
+data:
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  normalization_method: "zscore"  # Options: zscore, minmax, robust
+  missing_value_strategy: "mean"  # Options: mean, median, knn, drop
+  random_seed: 42
+  
+  # Log Transformation Configuration
+  log_transform:
+    platform_a:
+      enabled: false  # Set to true to apply log transformation to platform A
+      epsilon: 1e-8   # Small value added to ensure positive values
+    platform_b:
+      enabled: false  # Set to true to apply log transformation to platform B
+      epsilon: 1e-8   # Small value added to ensure positive values
+
+# Visualization
+visualization:
+  umap_n_neighbors: 15
+  umap_min_dist: 0.1
+  umap_random_state: 42
+  plot_style: "seaborn"
+  figsize: [10, 8]
+  dpi: 300
+
+# Logging and Checkpointing
+logging:
+  log_every_n_steps: 50
+  save_top_k: 3
+  monitor_metric: "val_total_loss"  # Options: val_total_loss, val_recon_a_r2, val_recon_b_r2, val_cross_a_r2, val_cross_b_r2
+  monitor_mode: "min"  # Use "max" when monitoring r or R² metrics
+  
+# Hardware
+hardware:
+  accelerator: "auto"  # auto, cpu, gpu, mps
+  devices: "auto"
+  precision: 32 
