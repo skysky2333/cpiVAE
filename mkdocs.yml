@@ -6,12 +6,10 @@ repo_url: https://github.com/skysky2333/cpiVAE
 repo_name: skysky2333/cpiVAE
 edit_uri: edit/main/docs/
 
-copyright: Copyright &copy; 2024 Sky - cpiVAE Project
+copyright: Copyright &copy; 2025 cpiVAE Project
 
 theme:
   name: material
-  logo: https://cdn-icons-png.flaticon.com/512/2103/2103633.png
-  favicon: https://cdn-icons-png.flaticon.com/512/2103/2103633.png
   palette:
     # Palette toggle for light mode
     - scheme: default
@@ -48,8 +46,6 @@ theme:
 plugins:
   - search:
       lang: en
-  - minify:
-      minify_html: true
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -83,18 +79,6 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
 
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/skysky2333/cpiVAE
-    - icon: fontawesome/solid/paper-plane
-      link: mailto:your-email@example.com
-  analytics:
-    provider: google
-    property: !ENV GOOGLE_ANALYTICS_KEY
-  version:
-    provider: mike
-
 nav:
   - Home: index.md
   - Getting Started:
@@ -103,8 +87,8 @@ nav:
     - Model Tuning: tune.md
   - Methods:
     - Baselines: baselines.md
-    - Comparison: comparison.md
-  - Analysis:
     - Quality Control: quality_control.md
+  - Analysis:
+    - Comparison: comparison.md
     - Feature Importance: feature_importance.md
     - Latent Space: latent_space.md
