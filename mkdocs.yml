@@ -1,0 +1,66 @@
+site_name: cpiVAE Documentation
+site_description: Cross-platform Proteomics Imputation using Variational Autoencoders
+site_author: Sky
+site_url: https://skysky2333.github.io/cpiVAE/
+repo_url: https://github.com/skysky2333/cpiVAE
+repo_name: skysky2333/cpiVAE
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - scheme: readthedocs
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode  
+    - scheme: slate
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.action.edit
+    - content.action.view
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - tables
+
+nav:
+  - Home: index.md
+  - Training: train.md
+  - Baselines: baselines.md
+  - Imputation: impute.md
+  - Model Tuning: tune.md
+  - Quality Control: quality_control.md
+  - Feature Importance: feature_importance.md
+  - Latent Space: latent_space.md
+  - Comparison: comparison.md
