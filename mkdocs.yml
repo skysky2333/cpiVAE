@@ -1,4 +1,4 @@
-site_name: cpiVAE Documentation
+site_name: cpiVAE
 site_description: Cross-platform Proteomics Imputation using Variational Autoencoders
 site_author: Sky
 site_url: https://skysky2333.github.io/cpiVAE/
@@ -6,20 +6,24 @@ repo_url: https://github.com/skysky2333/cpiVAE
 repo_name: skysky2333/cpiVAE
 edit_uri: edit/main/docs/
 
+copyright: Copyright &copy; 2024 Sky - cpiVAE Project
+
 theme:
   name: material
+  logo: https://cdn-icons-png.flaticon.com/512/2103/2103633.png
+  favicon: https://cdn-icons-png.flaticon.com/512/2103/2103633.png
   palette:
     # Palette toggle for light mode
-    - scheme: readthedocs
-      primary: blue
-      accent: light blue
+    - scheme: default
+      primary: indigo
+      accent: cyan
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     # Palette toggle for dark mode  
     - scheme: slate
-      primary: blue
-      accent: light blue
+      primary: indigo
+      accent: cyan
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -29,14 +33,24 @@ theme:
     - navigation.expand
     - navigation.path
     - navigation.top
+    - navigation.instant
+    - navigation.tracking
     - search.highlight
     - search.share
+    - search.suggest
     - content.action.edit
     - content.action.view
     - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+    - toc.integrate
 
 plugins:
-  - search
+  - search:
+      lang: en
+  - minify:
+      minify_html: true
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -45,7 +59,11 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - admonition
   - pymdownx.details
   - pymdownx.tabbed:
@@ -53,14 +71,41 @@ markdown_extensions:
   - attr_list
   - md_in_html
   - tables
+  - footnotes
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - def_list
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/skysky2333/cpiVAE
+    - icon: fontawesome/solid/paper-plane
+      link: mailto:your-email@example.com
+  analytics:
+    provider: google
+    property: !ENV GOOGLE_ANALYTICS_KEY
+  version:
+    provider: mike
 
 nav:
   - Home: index.md
-  - Training: train.md
-  - Baselines: baselines.md
-  - Imputation: impute.md
-  - Model Tuning: tune.md
-  - Quality Control: quality_control.md
-  - Feature Importance: feature_importance.md
-  - Latent Space: latent_space.md
-  - Comparison: comparison.md
+  - Getting Started:
+    - Training: train.md
+    - Imputation: impute.md
+    - Model Tuning: tune.md
+  - Methods:
+    - Baselines: baselines.md
+    - Comparison: comparison.md
+  - Analysis:
+    - Quality Control: quality_control.md
+    - Feature Importance: feature_importance.md
+    - Latent Space: latent_space.md
