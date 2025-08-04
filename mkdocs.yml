@@ -26,7 +26,6 @@ theme:
         icon: material/brightness-4
         name: Switch to light mode
   features:
-    - navigation.sections
     - navigation.path
     - navigation.top
     - navigation.instant
@@ -40,6 +39,7 @@ theme:
     - content.code.annotate
     - content.tabs.link
     - toc.follow
+
 
 plugins:
   - search:
@@ -74,13 +74,13 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started:
-    - Training: train.md
-    - Imputation: impute.md
-    - Model Tuning: tune.md
+      - Model Tuning: tune.md
+      - Training: train.md
+      - Imputation: impute.md
   - Methods:
-    - Baselines: baselines.md
-    - Quality Control: quality_control.md
+      - Baselines: baselines.md
+      - Quality Control: quality_control.md
   - Analysis:
-    - Comparison: comparison.md
-    - Feature Importance: feature_importance.md
-    - Latent Space: latent_space.md
+      - Comparison: comparison.md
+      - Feature Importance: feature_importance.md
+      - Latent Space: latent_space.md
