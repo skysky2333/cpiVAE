@@ -46,30 +46,37 @@ plugins:
       lang: en
 
 markdown_extensions:
-  - pymdownx.highlight:
-      anchor_linenums: true
-      line_spans: __span
-      pygments_lang_class: true
-  - pymdownx.inlinehilite
-  - pymdownx.snippets
-  - pymdownx.superfences
+  # ── Python-Markdown core ─────────────────────────
+  - abbr
   - admonition
-  - pymdownx.details
-  - pymdownx.tabbed:
-      alternate_style: true
   - attr_list
-  - md_in_html
-  - tables
-  - footnotes
-  - pymdownx.critic
-  - pymdownx.caret
-  - pymdownx.keys
-  - pymdownx.mark
-  - pymdownx.tilde
-  - pymdownx.emoji
   - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true          # adds ¶ links to every heading
+
+  # ── PyMdown Extensions (enhanced syntax) ─────────
+  - pymdownx.arithmatex:
+      generic: true            # inline/block math without extra JS
+  - pymdownx.betterem:
+      smart_enable: all        # smarter *em*/**strong** parsing
+  - pymdownx.caret             # ^superscript^ & ~~subscript~~
+  - pymdownx.details           # <details> disclosure blocks
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight         # code highlighting with extras
+  - pymdownx.inlinehilite      # `==inline code with CSS==`
+  - pymdownx.keys              # Press ⌘ C to copy
+  - pymdownx.mark              # ==highlights==
+  - pymdownx.smartsymbols      # (c) → ©, (tm) → ™, etc.
+  - pymdownx.superfences       # nested & mixed code fences
+  - pymdownx.tabbed:
+      alternate_style: true    # nice-looking code tabs
   - pymdownx.tasklist:
-      custom_checkbox: true
+      custom_checkbox: true    # [ ] task lists with custom boxes
+  - pymdownx.tilde
 
 nav:
   - Home: index.md
