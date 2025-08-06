@@ -137,11 +137,11 @@ class ResidualBlock(nn.Module):
         self.dropout = nn.Dropout(dropout_rate) if dropout_rate > 0 else nn.Identity()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        identity = x  # Save identity BEFORE any processing
-        
-        # Apply self-attention if enabled
+        # Apply self-attention if enabled (to both paths for proper residual connection)
         if self.use_attention:
             x = self.attention(x)
+        
+        identity = x  # Save identity AFTER attention processing
         
         # First layer
         out = self.layer1(x)

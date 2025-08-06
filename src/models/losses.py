@@ -16,34 +16,52 @@ def log_normal_diag(x, mu, log_var, reduction=None, dim=None):
 
 def total_correlation(z, mu, logvar):
     """
-    Computes the total correlation loss with a robust method.
-    This implementation is designed to be more numerically stable than
-    the standard log-sum-exp trick, especially when dealing with high-dimensional
-    latent spaces or posteriors that can have extreme values.
-
+    Computes the total correlation loss for FactorVAE.
+    
+    Total Correlation (TC) = KL[q(z) || ∏_j q(z_j)]
+    where q(z) is the aggregated posterior and ∏_j q(z_j) is the product of marginals.
+    
+    This implementation uses a minibatch-based approximation where:
+    - q(z) ≈ (1/N) Σ_i q(z|x_i) is approximated by the empirical distribution
+    - q(z_j) ≈ (1/N) Σ_i q(z_j|x_i) is approximated marginally
+    
     Args:
-        z (torch.Tensor): Samples from the latent space, shape [batch_size, latent_dim].
-        mu (torch.Tensor): The mean of the latent vector, shape [batch_size, latent_dim].
-        logvar (torch.Tensor): The log variance of the latent vector, shape [batch_size, latent_dim].
-
+        z: Samples from the latent space [batch_size, latent_dim]
+        mu: Mean of the latent distribution [batch_size, latent_dim]
+        logvar: Log variance of the latent distribution [batch_size, latent_dim]
+        
     Returns:
-        torch.Tensor: A scalar tensor representing the total correlation loss.
+        TC loss (scalar)
     """
     batch_size, latent_dim = z.shape
     
-    log_qz_i = log_normal_diag(z, mu, logvar)
-
-    mu_expanded = mu.unsqueeze(0).expand(batch_size, -1, -1)
-    logvar_expanded = logvar.unsqueeze(0).expand(batch_size, -1, -1)
-    z_expanded = z.unsqueeze(1).expand(-1, batch_size, -1)
+    # Compute log q(z_i | x_i) for each sample under its own distribution
+    # This gives us [batch_size, latent_dim] of log probabilities
+    log_qz_given_x = log_normal_diag(z, mu, logvar, reduction=None)
     
-    log_qz_i_j = log_normal_diag(z_expanded, mu_expanded, logvar_expanded).sum(dim=-1)
-
-    log_qz_agg = torch.logsumexp(log_qz_i_j, dim=1, keepdim=False) - math.log(batch_size)
+    # For minibatch approximation of TC, we need to evaluate each z under all q(z|x)
+    # Expand tensors for broadcasting
+    z_expand = z.unsqueeze(1)  # [batch_size, 1, latent_dim]
+    mu_expand = mu.unsqueeze(0)  # [1, batch_size, latent_dim]
+    logvar_expand = logvar.unsqueeze(0)  # [1, batch_size, latent_dim]
     
-    tc_loss = (log_qz_agg - log_qz_i.sum(dim=-1)).mean()
+    # Compute log q(z_i | x_j) for all pairs (i,j)
+    # Shape: [batch_size, batch_size, latent_dim]
+    log_qz_i_given_x_j = log_normal_diag(z_expand, mu_expand, logvar_expand, reduction=None)
     
-    return tc_loss
+    # Compute log q(z) ≈ log (1/N) Σ_j q(z|x_j) using logsumexp for stability
+    # Sum over the encoder index j, not the latent dimensions
+    log_qz = torch.logsumexp(log_qz_i_given_x_j.sum(dim=2), dim=1) - math.log(batch_size)
+    
+    # Compute log ∏_j q(z_j) = Σ_j log q(z_j)
+    # For each dimension j, compute log (1/N) Σ_i q(z_j|x_i)
+    log_qz_j = torch.logsumexp(log_qz_i_given_x_j, dim=1) - math.log(batch_size)
+    log_prod_qz_j = log_qz_j.sum(dim=1)
+    
+    # TC = E_q(z)[log q(z) - log ∏_j q(z_j)]
+    tc = (log_qz - log_prod_qz_j).mean()
+    
+    return tc
 
 
 def kl_divergence_alignment(mean_a, logvar_a, mean_b, logvar_b):

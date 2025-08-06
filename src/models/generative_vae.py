@@ -62,15 +62,25 @@ class _RunningR2:
         if self.n == 0:
             raise RuntimeError("No samples were accumulated.")
         n = float(self.n)
-        var_y = self.sum_y2 / n - (self.sum_y / n) ** 2  # σ²_y
-        cov = self.sum_y_yhat / n - (self.sum_y / n) * (self.sum_yhat / n)
-        var_res = self.sum_yhat2 / n - 2 * cov - (self.sum_y / n) ** 2 + var_y
+        
+        # Means
+        mean_y = self.sum_y / n
+        mean_yhat = self.sum_yhat / n
+        
+        # Variance of y
+        var_y = self.sum_y2 / n - mean_y ** 2
+        
+        # Mean Squared Error (MSE)
+        mse = self.sum_y2 / n - 2 * self.sum_y_yhat / n + self.sum_yhat2 / n
+        
         # Avoid tiny negative variances due to FP error
         var_y.clamp_(min=0.0)
-        var_res.clamp_(min=0.0)
+        mse.clamp_(min=0.0)
+        
+        # R² = 1 - MSE / Var(Y)
         r2_per_feature = torch.zeros_like(var_y)
         mask = var_y > 1e-12
-        r2_per_feature[mask] = 1.0 - var_res[mask] / var_y[mask]
+        r2_per_feature[mask] = 1.0 - mse[mask] / var_y[mask]
         overall_r2 = r2_per_feature.mean().item()
         return overall_r2, r2_per_feature
 
@@ -145,7 +155,7 @@ class ConditionalAutoregressiveDecoder(nn.Module):
     # Ancestral sampling (no ground truth)
     # ------------------------------------------------------------
     @torch.no_grad()
-    def sample(self, z: Tensor) -> Tensor:  # z: [B, L]
+    def sample(self, z: Tensor, temperature: float = 1.0) -> Tensor:  # z: [B, L]
         device = z.device
         B = z.size(0)
         x = torch.zeros(B, self.output_dim, device=device)
@@ -154,7 +164,8 @@ class ConditionalAutoregressiveDecoder(nn.Module):
             for i, layer in enumerate(self.layers[:-1]):
                 h = F.relu(layer(h) + self.latent_proj[i](z))
             logits = self.layers[-1](h)  # [B, D]
-            x[:, k] = logits[:, k]  # Regression – logits are means
+            # Stochastic sampling from Gaussian distribution
+            x[:, k] = logits[:, k] + torch.randn_like(logits[:, k]) * temperature
         return x
 
 # -----------------------------------------------------------------------------

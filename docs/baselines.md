@@ -98,9 +98,3 @@ python scripts/wnn_baseline.py \
 - `bandwidth_statistics.txt`: Bandwidth computation summary
 
 ---
-
-## Comparison Framework
-
-### Script: `compare_result.py`
-
-Please see [here](docs/comparison.md).

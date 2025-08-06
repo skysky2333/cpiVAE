@@ -214,7 +214,9 @@ class JointVAE(nn.Module):
         if k_samples is None:
             k_samples = self.k_samples
             
-        std = torch.exp(0.5 * logvar)  # [batch_size, latent_dim]
+        # Clamp logvar for numerical stability
+        logvar_clamped = torch.clamp(logvar, -10, 10)
+        std = torch.exp(0.5 * logvar_clamped)  # [batch_size, latent_dim]
         
         # Expand dimensions for k samples
         mean_expanded = mean.unsqueeze(0).expand(k_samples, -1, -1)  # [k_samples, batch_size, latent_dim]
@@ -532,11 +534,13 @@ class JointVAELightning(pl.LightningModule):
             recon_loss_b = F.mse_loss(outputs['recon_b'], x_b)
             recon_loss = (recon_loss_a + recon_loss_b) / 2
 
+            logvar_a_clamped = torch.clamp(outputs['logvar_a'], -10, 10)
+            logvar_b_clamped = torch.clamp(outputs['logvar_b'], -10, 10)
             kl_loss_a = 0.5 * torch.mean(
-                outputs['mean_a'].pow(2) + outputs['logvar_a'].exp() - 1 - outputs['logvar_a']
+                outputs['mean_a'].pow(2) + logvar_a_clamped.exp() - 1 - logvar_a_clamped
             )
             kl_loss_b = 0.5 * torch.mean(
-                outputs['mean_b'].pow(2) + outputs['logvar_b'].exp() - 1 - outputs['logvar_b']
+                outputs['mean_b'].pow(2) + logvar_b_clamped.exp() - 1 - logvar_b_clamped
             )
             kl_loss = (kl_loss_a + kl_loss_b) / 2
 
@@ -572,17 +576,22 @@ class JointVAELightning(pl.LightningModule):
         logvar_b_expanded = outputs['logvar_b'].unsqueeze(0)
         
         # log p(x|z): Reconstruction log-likelihood (assuming Gaussian with variance 1)
-        # Using -0.5 * MSE is equivalent to the log-pdf of a Gaussian up to a constant
-        log_p_x_given_z_a = -0.5 * F.mse_loss(outputs['recon_a'], x_a_expanded, reduction='none').sum(dim=-1)
-        log_p_x_given_z_b = -0.5 * F.mse_loss(outputs['recon_b'], x_b_expanded, reduction='none').sum(dim=-1)
+        # Complete Gaussian log-pdf: -D/2 * log(2π) - 0.5 * MSE
+        D_a = x_a.shape[-1]  # dimensionality of platform A
+        D_b = x_b.shape[-1]  # dimensionality of platform B
+        log_p_x_given_z_a = -0.5 * F.mse_loss(outputs['recon_a'], x_a_expanded, reduction='none').sum(dim=-1) - 0.5 * D_a * np.log(2 * np.pi)
+        log_p_x_given_z_b = -0.5 * F.mse_loss(outputs['recon_b'], x_b_expanded, reduction='none').sum(dim=-1) - 0.5 * D_b * np.log(2 * np.pi)
 
         # log p(z): Prior log-likelihood (standard normal)
-        log_p_z_a = torch.sum(-0.5 * outputs['z_a']**2, dim=-1)
-        log_p_z_b = torch.sum(-0.5 * outputs['z_b']**2, dim=-1)
+        # Complete Gaussian log-pdf: -D_z/2 * log(2π) - 0.5 * ||z||²
+        latent_dim = outputs['z_a'].shape[-1]
+        log_p_z_a = torch.sum(-0.5 * outputs['z_a']**2, dim=-1) - 0.5 * latent_dim * np.log(2 * np.pi)
+        log_p_z_b = torch.sum(-0.5 * outputs['z_b']**2, dim=-1) - 0.5 * latent_dim * np.log(2 * np.pi)
         
         # log q(z|x): Variational posterior log-likelihood
-        log_q_z_given_x_a = torch.sum(-0.5 * outputs['eps_a']**2 - 0.5 * logvar_a_expanded, dim=-1)
-        log_q_z_given_x_b = torch.sum(-0.5 * outputs['eps_b']**2 - 0.5 * logvar_b_expanded, dim=-1)
+        # Complete Gaussian log-pdf: -D_z/2 * log(2π) - 0.5 * Σ[log(σ²) + ε²]
+        log_q_z_given_x_a = torch.sum(-0.5 * outputs['eps_a']**2 - 0.5 * logvar_a_expanded, dim=-1) - 0.5 * latent_dim * np.log(2 * np.pi)
+        log_q_z_given_x_b = torch.sum(-0.5 * outputs['eps_b']**2 - 0.5 * logvar_b_expanded, dim=-1) - 0.5 * latent_dim * np.log(2 * np.pi)
 
         log_weight_a = log_p_x_given_z_a + log_p_z_a - log_q_z_given_x_a
         log_weight_b = log_p_x_given_z_b + log_p_z_b - log_q_z_given_x_b
@@ -626,8 +635,10 @@ class JointVAELightning(pl.LightningModule):
         recon_b_mean = torch.mean(outputs['recon_b'], dim=0)
         recon_loss_log = (F.mse_loss(recon_a_mean, x_a) + F.mse_loss(recon_b_mean, x_b)) / 2
         
-        kl_loss_a_log = 0.5 * torch.mean(outputs['mean_a'].pow(2) + outputs['logvar_a'].exp() - 1 - outputs['logvar_a'])
-        kl_loss_b_log = 0.5 * torch.mean(outputs['mean_b'].pow(2) + outputs['logvar_b'].exp() - 1 - outputs['logvar_b'])
+        logvar_a_clamped = torch.clamp(outputs['logvar_a'], -10, 10)
+        logvar_b_clamped = torch.clamp(outputs['logvar_b'], -10, 10)
+        kl_loss_a_log = 0.5 * torch.mean(outputs['mean_a'].pow(2) + logvar_a_clamped.exp() - 1 - logvar_a_clamped)
+        kl_loss_b_log = 0.5 * torch.mean(outputs['mean_b'].pow(2) + logvar_b_clamped.exp() - 1 - logvar_b_clamped)
         kl_loss_log = (kl_loss_a_log + kl_loss_b_log) / 2
 
         return {
