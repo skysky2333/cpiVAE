@@ -594,9 +594,10 @@ class LatentSpaceAnalyzer:
             ax1.legend()
             ax1.grid(True, alpha=0.3)
         
-        # Right plot: Show dimension value changes
-        ax2.plot(range(n_steps), traversal_range, 'bo-', linewidth=2, markersize=8)
-        ax2.axhline(y=0, color='red', linestyle='--', alpha=0.7, label='Original mean')
+        # Right plot: Show absolute dimension value changes
+        abs_values = mean_latent[target_dim] + traversal_range
+        ax2.plot(range(n_steps), abs_values, 'bo-', linewidth=2, markersize=8)
+        ax2.axhline(y=mean_latent[target_dim], color='red', linestyle='--', alpha=0.7, label='Original mean')
         ax2.set_xlabel('Traversal Step')
         ax2.set_ylabel(f'Dimension {target_dim+1} Value')
         ax2.set_title(f'Dimension {target_dim+1} Value Changes')
@@ -665,7 +666,7 @@ class LatentSpaceAnalyzer:
                             NATURE_COLORS['highlight']]
             
             for i, group in enumerate(unique_groups):
-                group_mask = data.groups == group
+                group_mask = (data.groups == group).values
                 group_embedding = embedding_a[group_mask]
                 color = palette_colors[i % len(palette_colors)]
                 ax1.scatter(group_embedding[:, 0], group_embedding[:, 1], 
@@ -810,6 +811,195 @@ class LatentSpaceAnalyzer:
         plt.tight_layout()
         return fig
     
+    def generate_platform_delta_analysis(self, data: LatentAnalysisData):
+        """Figure 6: PCA and UMAP of per-sample latent differences (B − A)."""
+        print("Generating platform delta (B − A) analysis...")
+
+        # Compute per-sample latent deltas
+        delta_df = data.latent_b - data.latent_a
+
+        # Compute embeddings on deltas
+        delta_embeddings: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        # PCA on deltas
+        pca = PCA(n_components=2, random_state=42)
+        pca_embedding = pca.fit_transform(delta_df)
+        delta_embeddings['pca'] = {
+            'embedding': pca_embedding,
+            'explained_variance': pca.explained_variance_ratio_,
+        }
+
+        # UMAP on deltas (if available)
+        if UMAP_AVAILABLE:
+            try:
+                umap_model = umap.UMAP(n_components=2, random_state=42,
+                                       n_neighbors=15, min_dist=0.1)
+                umap_embedding = umap_model.fit_transform(delta_df)
+                delta_embeddings['umap'] = {
+                    'embedding': umap_embedding,
+                }
+            except Exception as e:
+                print(f"  UMAP on delta failed: {e}")
+                delta_embeddings['umap'] = None
+        else:
+            print("  Skipping UMAP on delta (not available)")
+            delta_embeddings['umap'] = None
+
+        # Create figure with available methods (PCA always present)
+        n_methods = sum(1 for emb in delta_embeddings.values() if emb is not None)
+        fig, axes = plt.subplots(1, n_methods, figsize=(5 * n_methods, 5))
+        if n_methods == 1:
+            axes = [axes]
+
+        fig.suptitle('Latent Delta (B − A): PCA and UMAP', fontsize=16, fontweight='bold')
+
+        # Color configuration for groups if available
+        groups = data.groups
+        method_idx = 0
+        for method_name, embedding_data in delta_embeddings.items():
+            if embedding_data is None:
+                continue
+
+            embedding = embedding_data['embedding']
+            ax = axes[method_idx]
+
+            if groups is not None:
+                unique_groups = groups.unique()
+                palette_colors = [
+                    NATURE_COLORS['primary'],
+                    NATURE_COLORS['secondary'],
+                    NATURE_COLORS['accent'],
+                    NATURE_COLORS['neutral'],
+                    NATURE_COLORS['highlight'],
+                ]
+                for i, group in enumerate(unique_groups):
+                    mask = groups == group
+                    color = palette_colors[i % len(palette_colors)]
+                    ax.scatter(
+                        embedding[mask, 0],
+                        embedding[mask, 1],
+                        c=color,
+                        alpha=0.7,
+                        s=12,
+                        label=str(group),
+                        edgecolors='black',
+                        linewidth=0.1,
+                    )
+                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            else:
+                ax.scatter(
+                    embedding[:, 0],
+                    embedding[:, 1],
+                    c=NATURE_COLORS['neutral'],
+                    alpha=0.7,
+                    s=12,
+                    edgecolors='black',
+                    linewidth=0.1,
+                )
+
+            if method_name == 'pca':
+                var_ratio = embedding_data['explained_variance']
+                ax.set_xlabel(f'PC1 ({var_ratio[0]:.1%} variance)')
+                ax.set_ylabel(f'PC2 ({var_ratio[1]:.1%} variance)')
+            else:
+                ax.set_xlabel(f'{method_name.upper()} 1')
+                ax.set_ylabel(f'{method_name.upper()} 2')
+
+            ax.set_title(f'{method_name.upper()} of Latent Delta (B − A)')
+            ax.grid(True, alpha=0.3)
+            method_idx += 1
+
+        plt.tight_layout()
+        return fig
+
+    def generate_platform_delta_vs_sample_scale(self, data: LatentAnalysisData):
+        """Figure 6b: Compare overall sample spread (Fig1 PCA) vs per-sample deltas projected on the same PCA axes."""
+        print("Generating delta vs sample scale comparison (projected on Fig1 PCA)...")
+
+        if data.embeddings is None or 'pca' not in data.embeddings or data.embeddings['pca'] is None:
+            raise ValueError("PCA embedding not available. Run compute_embeddings first.")
+
+        embedding = data.embeddings['pca']['embedding']
+        var_ratio = data.embeddings['pca']['explained_variance']
+
+        n_samples = len(data.latent_a)
+        embedding_a = embedding[:n_samples]
+        embedding_b = embedding[n_samples:]
+
+        # Deltas in the same PCA space as Figure 1
+        delta_pc = embedding_b - embedding_a
+
+        # Shared axis limits from the full PCA scatter
+        x_min, x_max = np.min(embedding[:, 0]), np.max(embedding[:, 0])
+        y_min, y_max = np.min(embedding[:, 1]), np.max(embedding[:, 1])
+        x_pad = 0.05 * (x_max - x_min) if x_max > x_min else 1.0
+        y_pad = 0.05 * (y_max - y_min) if y_max > y_min else 1.0
+        xlim = (x_min - x_pad, x_max + x_pad)
+        ylim = (y_min - y_pad, y_max + y_pad)
+
+        fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(12, 5))
+        fig.suptitle('Delta vs Sample Scale (Projected on Fig1 PCA)', fontsize=16, fontweight='bold')
+
+        # Left: overall sample spread in PCA
+        ax_left.scatter(embedding_a[:, 0], embedding_a[:, 1],
+                        c=NATURE_COLORS['primary'], alpha=0.6, s=10,
+                        label=data.platform_a_name, edgecolors='black', linewidth=0.1)
+        ax_left.scatter(embedding_b[:, 0], embedding_b[:, 1],
+                        c=NATURE_COLORS['secondary'], alpha=0.6, s=10,
+                        label=data.platform_b_name, edgecolors='black', linewidth=0.1)
+        ax_left.set_xlim(xlim)
+        ax_left.set_ylim(ylim)
+        ax_left.set_xlabel(f'PC1 ({var_ratio[0]:.1%} variance)')
+        ax_left.set_ylabel(f'PC2 ({var_ratio[1]:.1%} variance)')
+        ax_left.set_title('Overall Sample Spread (Fig1 PCA)')
+        ax_left.legend(loc='upper right')
+        ax_left.grid(True, alpha=0.3)
+
+        # Right: per-sample deltas in the same PCA axes, anchored at origin
+        if data.groups is not None:
+            unique_groups = data.groups.unique()
+            palette_colors = [
+                NATURE_COLORS['primary'],
+                NATURE_COLORS['secondary'],
+                NATURE_COLORS['accent'],
+                NATURE_COLORS['neutral'],
+                NATURE_COLORS['highlight'],
+            ]
+            for i, group in enumerate(unique_groups):
+                mask = (data.groups == group).values
+                color = palette_colors[i % len(palette_colors)]
+                ax_right.scatter(delta_pc[mask, 0], delta_pc[mask, 1],
+                                 c=color, alpha=0.7, s=12, label=str(group),
+                                 edgecolors='black', linewidth=0.1)
+            ax_right.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        else:
+            ax_right.scatter(delta_pc[:, 0], delta_pc[:, 1],
+                             c=NATURE_COLORS['neutral'], alpha=0.7, s=12,
+                             edgecolors='black', linewidth=0.1)
+
+        ax_right.set_xlim(xlim)
+        ax_right.set_ylim(ylim)
+        ax_right.set_xlabel(f'PC1 ({var_ratio[0]:.1%} variance)')
+        ax_right.set_ylabel(f'PC2 ({var_ratio[1]:.1%} variance)')
+        ax_right.set_title('Per-sample Δ (B − A) in Fig1 PCA axes')
+        ax_right.grid(True, alpha=0.3)
+
+        # Summary statistics annotation
+        sample_radii = np.sqrt(np.sum(embedding**2, axis=1))
+        mean_sample_radius = float(np.mean(sample_radii))
+        delta_norms = np.sqrt(np.sum(delta_pc**2, axis=1))
+        mean_delta_norm = float(np.mean(delta_norms))
+        ratio = mean_delta_norm / mean_sample_radius if mean_sample_radius > 0 else np.nan
+        ax_right.text(0.02, 0.98,
+                      f'Mean |Δ|: {mean_delta_norm:.3f}\n'
+                      f'Mean |sample|: {mean_sample_radius:.3f}\n'
+                      f'Ratio (Δ/sample): {ratio:.3f}',
+                      transform=ax_right.transAxes, fontsize=10, va='top',
+                      bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        plt.tight_layout()
+        return fig
+
     def generate_all_figures(self, data: LatentAnalysisData):
         """Generate all latent space analysis figures"""
         print("\nGenerating comprehensive latent space analysis figures...")
@@ -866,6 +1056,26 @@ class LatentSpaceAnalyzer:
                 generated_figures.append("latent_05_interpolation_analysis")
         except Exception as e:
             print(f"  Error generating interpolation analysis: {str(e)}")
+        
+        # Figure 6: Delta (B − A) analysis
+        try:
+            fig6 = self.generate_platform_delta_analysis(data)
+            if fig6:
+                self.save_figure(fig6, "latent_06_delta_platform_differences")
+                plt.close(fig6)
+                generated_figures.append("latent_06_delta_platform_differences")
+        except Exception as e:
+            print(f"  Error generating delta analysis: {str(e)}")
+        
+        # Figure 6b: Delta vs sample scale on Fig1 PCA axes
+        try:
+            fig6b = self.generate_platform_delta_vs_sample_scale(data)
+            if fig6b:
+                self.save_figure(fig6b, "latent_06b_delta_vs_sample_scale")
+                plt.close(fig6b)
+                generated_figures.append("latent_06b_delta_vs_sample_scale")
+        except Exception as e:
+            print(f"  Error generating delta vs sample scale (6b): {str(e)}")
         
         print(f"\nGenerated {len(generated_figures)} latent space figures")
         return generated_figures

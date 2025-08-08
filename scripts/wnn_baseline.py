@@ -3,8 +3,7 @@
 WNN (Weighted Nearest Neighbors) Baseline for Joint VAE comparison.
 
 This script implements a Weighted Nearest Neighbors approach for cross-platform 
-metabolite data imputation, adapting the WNN algorithm from Hao et al. 2021 
-to compare against the Joint VAE model.
+metabolite data imputation, adapting the WNN algorithm from Hao et al. 2021
 """
 
 import argparse
@@ -13,6 +12,8 @@ import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import itertools
+import json
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, normalize
 from sklearn.model_selection import train_test_split, KFold
@@ -483,6 +484,60 @@ def parse_arguments():
         type=str, 
         required=True,
         help='Path to platform A data file (CSV or TXT)'
+    )
+    parser.add_argument(
+        '--grid_search',
+        action='store_true',
+        help='Enable hyperparameter grid search using the existing train/test split'
+    )
+    parser.add_argument(
+        '--grid_metric',
+        type=str,
+        default='overall_r2',
+        choices=['overall_r2', 'overall_correlation', 'overall_mse', 'overall_mae'],
+        help='Metric to optimize during grid search'
+    )
+    parser.add_argument(
+        '--grid_direction',
+        type=str,
+        default='a_to_b',
+        choices=['a_to_b', 'b_to_a', 'mean'],
+        help='Which direction to optimize: A→B, B→A, or mean of both'
+    )
+    parser.add_argument(
+        '--grid_n_neighbors',
+        type=int,
+        nargs='+',
+        default=None,
+        help='Grid values for n_neighbors'
+    )
+    parser.add_argument(
+        '--grid_n_neighbors_union',
+        type=int,
+        nargs='+',
+        default=None,
+        help='Grid values for n_neighbors_union'
+    )
+    parser.add_argument(
+        '--grid_n_pca_components',
+        type=int,
+        nargs='+',
+        default=None,
+        help='Grid values for n_pca_components'
+    )
+    parser.add_argument(
+        '--grid_k_weight',
+        type=int,
+        nargs='+',
+        default=None,
+        help='Grid values for k_weight (neighbors for imputation)'
+    )
+    parser.add_argument(
+        '--grid_wnn_regularization',
+        type=float,
+        nargs='+',
+        default=None,
+        help='Grid values for wnn_regularization'
     )
     parser.add_argument(
         '--platform_b', 
@@ -1694,27 +1749,183 @@ def main():
             train_a, train_b, test_a, test_b, args.normalization
         )
         
-        # 5. Train Seurat-like models (WNN -> sPCA -> kNN)
-        models_a_to_b, models_b_to_a = train_seurat_like_models(
-            train_a_norm, train_b_norm,
-            n_pca_components=args.n_pca_components,
-            n_neighbors=args.n_neighbors,
-            n_neighbors_union=args.n_neighbors_union,
-            regularization=args.wnn_regularization,
-            random_seed=args.random_seed,
-            k_weight=args.k_weight
-        )
-        
-        # 6. Evaluate models, passing all the necessary pieces
-        results = evaluate_models(
-            models_a_to_b, models_b_to_a,
-            test_a_norm, test_b_norm,
-            original_test_a, original_test_b, # Pass original test data for evaluation
-            scaler_a, scaler_b,              # Pass fitted scalers
-            log_params,                       # Pass log parameters
-            features_a, features_b
-        )
-        is_cv = False
+        best_params = None
+        if args.grid_search:
+            logger.info("Grid search enabled. Exploring hyperparameter combinations...")
+
+            # Build grids with sensible defaults if not provided
+            grid_n_neighbors = args.grid_n_neighbors or [args.n_neighbors, max(10, args.n_neighbors // 2), args.n_neighbors * 2]
+            grid_n_neighbors = sorted(set([n for n in grid_n_neighbors if n >= 1]))
+
+            grid_n_neighbors_union = args.grid_n_neighbors_union or [max(args.n_neighbors_union // 2, args.n_neighbors), args.n_neighbors_union, args.n_neighbors_union * 2]
+            grid_n_neighbors_union = sorted(set([n for n in grid_n_neighbors_union if n >= 1]))
+
+            grid_n_pca_components = args.grid_n_pca_components or [max(10, args.n_pca_components // 2), args.n_pca_components, args.n_pca_components * 2]
+            grid_n_pca_components = sorted(set([n for n in grid_n_pca_components if n >= 1]))
+
+            grid_k_weight = args.grid_k_weight or [max(10, args.k_weight // 2), args.k_weight, args.k_weight * 2]
+            grid_k_weight = sorted(set([n for n in grid_k_weight if n >= 1]))
+
+            grid_wnn_regularization = args.grid_wnn_regularization or [1e-5, args.wnn_regularization, 1e-3]
+            grid_wnn_regularization = sorted(set([float(x) for x in grid_wnn_regularization if x > 0]))
+
+            minimize_metrics = {'overall_mse', 'overall_mae'}
+
+            def transform_score(metric_name: str, value: float) -> float:
+                return -value if metric_name in minimize_metrics else value
+
+            n_train_samples = train_a_norm.shape[0]
+            max_valid_neighbors = n_train_samples
+            max_valid_k = n_train_samples
+
+            # Infer optimization direction from impute_target if provided
+            effective_direction = args.grid_direction
+            if args.impute_target is not None:
+                if args.impute_target == 'a':
+                    effective_direction = 'b_to_a'
+                elif args.impute_target == 'b':
+                    effective_direction = 'a_to_b'
+                logger.info(f"Optimization direction inferred from impute_target='{args.impute_target}': {effective_direction}")
+
+            all_rows = []
+            best_objective = -np.inf
+            best_result = None
+            best_params = None
+
+            for (n_neighbors_cur,
+                 n_neighbors_union_cur,
+                 n_pca_components_cur,
+                 k_weight_cur,
+                 wnn_reg_cur) in itertools.product(
+                     grid_n_neighbors,
+                     grid_n_neighbors_union,
+                     grid_n_pca_components,
+                     grid_k_weight,
+                     grid_wnn_regularization
+                 ):
+
+                if n_neighbors_cur > max_valid_neighbors:
+                    continue
+                if n_neighbors_union_cur < n_neighbors_cur or n_neighbors_union_cur > max_valid_neighbors:
+                    continue
+                if k_weight_cur > max_valid_k:
+                    continue
+
+                try:
+                    models_a_to_b, models_b_to_a = train_seurat_like_models(
+                        train_a_norm, train_b_norm,
+                        n_pca_components=n_pca_components_cur,
+                        n_neighbors=n_neighbors_cur,
+                        n_neighbors_union=n_neighbors_union_cur,
+                        regularization=wnn_reg_cur,
+                        random_seed=args.random_seed,
+                        k_weight=k_weight_cur
+                    )
+
+                    res = evaluate_models(
+                        models_a_to_b, models_b_to_a,
+                        test_a_norm, test_b_norm,
+                        original_test_a, original_test_b,
+                        scaler_a, scaler_b,
+                        log_params,
+                        features_a, features_b
+                    )
+
+                    ma = res['metrics_a_to_b']
+                    mb = res['metrics_b_to_a']
+
+                    score_a_raw = ma.get(args.grid_metric, None)
+                    score_b_raw = mb.get(args.grid_metric, None)
+                    if score_a_raw is None or score_b_raw is None:
+                        continue
+
+                    score_a = transform_score(args.grid_metric, score_a_raw)
+                    score_b = transform_score(args.grid_metric, score_b_raw)
+
+                    if effective_direction == 'a_to_b':
+                        objective = score_a
+                    elif effective_direction == 'b_to_a':
+                        objective = score_b
+                    else:
+                        objective = 0.5 * (score_a + score_b)
+
+                    all_rows.append({
+                        'n_neighbors': n_neighbors_cur,
+                        'n_neighbors_union': n_neighbors_union_cur,
+                        'n_pca_components': n_pca_components_cur,
+                        'k_weight': k_weight_cur,
+                        'wnn_regularization': wnn_reg_cur,
+                        'a_to_b_overall_r2': ma.get('overall_r2'),
+                        'b_to_a_overall_r2': mb.get('overall_r2'),
+                        'a_to_b_overall_correlation': ma.get('overall_correlation'),
+                        'b_to_a_overall_correlation': mb.get('overall_correlation'),
+                        'metric_a': score_a_raw,
+                        'metric_b': score_b_raw,
+                        'objective': objective,
+                    })
+
+                    if objective > best_objective:
+                        best_objective = objective
+                        best_result = res
+                        best_params = {
+                            'n_neighbors': n_neighbors_cur,
+                            'n_neighbors_union': n_neighbors_union_cur,
+                            'n_pca_components': n_pca_components_cur,
+                            'k_weight': k_weight_cur,
+                            'wnn_regularization': wnn_reg_cur,
+                            'grid_metric': args.grid_metric,
+                            'grid_direction': effective_direction,
+                        }
+                        logger.info(f"New best objective {best_objective:.6f} with params: {best_params}")
+
+                except SystemExit:
+                    raise
+                except Exception as e:
+                    logger.warning(f"Skipping combination due to error: n_neighbors={n_neighbors_cur}, n_neighbors_union={n_neighbors_union_cur}, n_pca_components={n_pca_components_cur}, k_weight={k_weight_cur}, wnn_reg={wnn_reg_cur}. Error: {e}")
+                    continue
+
+            if not all_rows or best_result is None:
+                logger.error("Grid search failed to find a valid configuration.")
+                sys.exit(1)
+
+            # Save grid results and best params
+            grid_df = pd.DataFrame(all_rows)
+            output_path = Path(args.output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            grid_csv_path = output_path / 'grid_search_results.csv'
+            grid_df.to_csv(grid_csv_path, index=False)
+
+            best_json_path = output_path / 'best_grid_params.json'
+            with open(best_json_path, 'w') as f:
+                json.dump(best_params, f, indent=2)
+
+            logger.info(f"Grid search completed. Results saved to {grid_csv_path}. Best params saved to {best_json_path}.")
+
+            results = best_result
+            is_cv = False
+
+        else:
+            # 5. Train Seurat-like models (WNN -> sPCA -> kNN)
+            models_a_to_b, models_b_to_a = train_seurat_like_models(
+                train_a_norm, train_b_norm,
+                n_pca_components=args.n_pca_components,
+                n_neighbors=args.n_neighbors,
+                n_neighbors_union=args.n_neighbors_union,
+                regularization=args.wnn_regularization,
+                random_seed=args.random_seed,
+                k_weight=args.k_weight
+            )
+            
+            # 6. Evaluate models, passing all the necessary pieces
+            results = evaluate_models(
+                models_a_to_b, models_b_to_a,
+                test_a_norm, test_b_norm,
+                original_test_a, original_test_b, # Pass original test data for evaluation
+                scaler_a, scaler_b,              # Pass fitted scalers
+                log_params,                       # Pass log parameters
+                features_a, features_b
+            )
+            is_cv = False
     
     # Save and print results
     summary = save_results(results, args.output_dir, is_cv)
@@ -1724,14 +1935,24 @@ def main():
     if args.platform_impute is not None:
         print(f"\nPerforming cross-imputation...")
         try:
+            # Use best params from grid search if available, else fallback to args
+            n_neighbors_imp = best_params['n_neighbors'] if ('best_params' in locals() and best_params) else args.n_neighbors
+            n_neighbors_union_imp = best_params['n_neighbors_union'] if ('best_params' in locals() and best_params) else args.n_neighbors_union
+            n_pca_components_imp = best_params['n_pca_components'] if ('best_params' in locals() and best_params) else args.n_pca_components
+            k_weight_imp = best_params['k_weight'] if ('best_params' in locals() and best_params) else args.k_weight
+            wnn_regularization_imp = best_params['wnn_regularization'] if ('best_params' in locals() and best_params) else args.wnn_regularization
+
+            if best_params is not None:
+                logger.info(f"Cross-imputation will use best grid params: {best_params}")
+
             imputed_file = perform_cross_imputation(
                 args.platform_a, args.platform_b, args.platform_impute, 
                 args.impute_target,
-                n_pca_components=args.n_pca_components,
-                n_neighbors=args.n_neighbors,
-                n_neighbors_union=args.n_neighbors_union,
-                wnn_regularization=args.wnn_regularization,
-                k_weight=args.k_weight,
+                n_pca_components=n_pca_components_imp,
+                n_neighbors=n_neighbors_imp,
+                n_neighbors_union=n_neighbors_union_imp,
+                wnn_regularization=wnn_regularization_imp,
+                k_weight=k_weight_imp,
                 random_seed=args.random_seed,
                 log_transform_a=args.log_transform_a,
                 log_transform_b=args.log_transform_b,

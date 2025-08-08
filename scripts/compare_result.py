@@ -1557,12 +1557,15 @@ class ComparativeAnalyzer:
             'Git_Hash': self.git_hash,
             'Timestamp': self.timestamp
         }
-        
+
+        # Extract PNG DPI if provided, avoid passing duplicate 'dpi'
+        png_dpi = kwargs.pop('dpi', 300)
+
         # Save PDF (vector format for publication)
         fig.savefig(fig_path, format='pdf', metadata=metadata, **kwargs)
-        
-        # Save PNG (for quick viewing)
-        fig.savefig(png_path, format='png', dpi=300, **kwargs)
+
+        # Save PNG (for quick viewing) at requested/ default DPI
+        fig.savefig(png_path, format='png', dpi=png_dpi, **kwargs)
         
         print(f"  Figure saved: {fig_path}")
     
@@ -2018,6 +2021,232 @@ class ComparativeAnalyzer:
         plt.tight_layout()
         return fig
     
+    def generate_figure_3b_vertical_violin_plots(self, data: AnalysisData):
+        """Figure 3b: Vertically stacked violin plots with Method 4 as horizontal baseline and statistical testing (cross-platform)"""
+        print("Generating Figure 3b: Vertical violin plots with statistical testing (cross-platform)...")
+        
+        from scipy.stats import mannwhitneyu
+        
+        # Create platform name mapping
+        platform_name_map = {
+            'Platform_A': data.platform_a_name,
+            'Platform_B': data.platform_b_name
+        }
+        
+        feat_metrics = data.metrics['feature_wise']
+        sample_metrics = data.metrics['sample_wise']
+        
+        # Check if we have any metrics
+        if feat_metrics.empty and sample_metrics.empty:
+            print("    No metrics available - creating placeholder figure")
+            fig, ax = plt.subplots(figsize=(8, 8))
+            ax.text(0.5, 0.5, 'No metrics available\n(No features in common between platforms)', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Performance Distributions')
+            return fig
+        
+        # Create 2x2 layout for feature-wise and sample-wise, each platform separate
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(8, 6))
+        fig.suptitle('Cross-Platform Vertical Distribution Analysis with Statistical Testing', 
+                     fontsize=16, fontweight='bold')
+        # Make subplots square
+        for ax in (ax1, ax2, ax3, ax4):
+            try:
+                ax.set_box_aspect(1)
+            except Exception:
+                pass
+        
+        platforms = ['Platform_A', 'Platform_B']
+        colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], 
+                 NATURE_COLORS['accent'], NATURE_COLORS['alternative_1'],
+                 NATURE_COLORS['alternative_2'], NATURE_COLORS['alternative_3'],
+                 NATURE_COLORS['highlight'], NATURE_COLORS['alternative_4']]
+        
+        def create_single_platform_vertical_violin_plot_with_stats(ax, platform_data, metric_name, plot_title, platform_name):
+            """Create vertical violin plots with baseline and top significance bars for a single platform"""
+            methods_data = []
+            labels = []
+            method_keys = []
+            baseline_data = None
+            baseline_name = None
+            
+            if len(platform_data) > 0:
+                # Collect all available methods for this platform
+                method_mapping = {
+                    'Method_1': data.method1_name,
+                    'Method_2': data.method2_name,
+                    'Method_3': data.method3_name,
+                    'Method_4': data.method4_name
+                }
+                
+                for method_key, method_name in method_mapping.items():
+                    if method_name is not None:
+                        method_subset = platform_data[platform_data['method'] == method_key]
+                        if len(method_subset) > 0:
+                            method_data = method_subset['r'].values
+                            
+                            # Check if this is Method 4 (baseline)
+                            if method_key == 'Method_4':
+                                baseline_data = method_data
+                                baseline_name = method_name
+                            else:
+                                methods_data.append(method_data)
+                                labels.append(method_name)
+                                method_keys.append(method_key)
+            
+            if len(methods_data) > 0:
+                # Create vertical violin plot
+                n_methods = len(methods_data)
+                positions = list(range(1, n_methods + 1))
+
+                # Preserve method order: Method 1, Method 2, Method 3
+                methods_data_plot = methods_data
+                labels_plot = labels
+
+                violin_parts = ax.violinplot(
+                    methods_data_plot,
+                    positions=positions,
+                    widths=0.6,
+                    vert=True,
+                    showmeans=True,
+                    showmedians=True,
+                    showextrema=True,
+                )
+
+                for i, pc in enumerate(violin_parts['bodies']):
+                    pc.set_facecolor(colors[i % len(colors)])
+                    pc.set_alpha(0.7)
+                    pc.set_edgecolor('black')
+                    pc.set_linewidth(0.8)
+
+                if 'cmeans' in violin_parts:
+                    violin_parts['cmeans'].set_color('red')
+                    violin_parts['cmeans'].set_linewidth(2)
+                if 'cmedians' in violin_parts:
+                    violin_parts['cmedians'].set_color('blue')
+                    violin_parts['cmedians'].set_linewidth(2)
+                if 'cbars' in violin_parts:
+                    violin_parts['cbars'].set_color('black')
+                    violin_parts['cbars'].set_linewidth(1.5)
+                if 'cmins' in violin_parts:
+                    violin_parts['cmins'].set_color('black')
+                    violin_parts['cmins'].set_linewidth(1.5)
+                if 'cmaxes' in violin_parts:
+                    violin_parts['cmaxes'].set_color('black')
+                    violin_parts['cmaxes'].set_linewidth(1.5)
+
+                baseline_mean = None
+                if baseline_data is not None:
+                    baseline_mean = np.mean(baseline_data)
+                    ax.axhline(
+                        baseline_mean,
+                        color=colors[3],
+                        linestyle='--',
+                        linewidth=3,
+                        alpha=0.9,
+                        label=f'{baseline_name} (baseline): {baseline_mean:.3f}',
+                        zorder=10,
+                    )
+
+                # Pairwise statistical tests with top significance bars
+                data_vals = [float(v) for d in methods_data for v in np.atleast_1d(d)]
+                data_min = (min(data_vals) if len(data_vals) > 0 else 0.0)
+                if baseline_mean is not None:
+                    data_min = min(data_min, float(baseline_mean))
+                if len(methods_data) > 1:
+                    data_max = max([float(np.max(d)) for d in methods_data])
+                    if baseline_mean is not None:
+                        data_max = max(data_max, float(baseline_mean))
+                    top_base = max(1.0, data_max)
+                    y_start = top_base + 0.03
+                    y_step = 0.04
+                    comparison_idx = 0
+
+                    for i in range(len(methods_data_plot)):
+                        for j in range(i + 1, len(methods_data_plot)):
+                            try:
+                                _, p_value = mannwhitneyu(
+                                    methods_data_plot[i],
+                                    methods_data_plot[j],
+                                    alternative='two-sided',
+                                )
+                                if p_value < 0.001:
+                                    sig_text = '***'
+                                elif p_value < 0.01:
+                                    sig_text = '**'
+                                elif p_value < 0.05:
+                                    sig_text = '*'
+                                else:
+                                    sig_text = 'ns'
+
+                                y = y_start + y_step * comparison_idx
+                                x1, x2 = positions[i], positions[j]
+                                ax.plot([x1, x1, x2, x2], [y - 0.005, y, y, y - 0.005], 'k-', linewidth=1)
+                                ax.text((x1 + x2) / 2.0, y + 0.01, sig_text, ha='center', va='bottom', fontsize=8)
+                                comparison_idx += 1
+                            except Exception as e:
+                                print(f"    Warning: Statistical test failed for {labels_plot[i]} vs {labels_plot[j]}: {e}")
+
+                    lower_bound = min(0.0, data_min - 0.05)
+                    ax.set_ylim(lower_bound, y_start + y_step * (comparison_idx + 1))
+                else:
+                    top_base = max(1.0, (baseline_mean + 0.1) if baseline_mean is not None else 1.0)
+                    lower_bound = min(0.0, data_min - 0.05)
+                    ax.set_ylim(lower_bound, top_base)
+
+                ax.set_xticks(positions)
+                ax.set_xticklabels(labels_plot, rotation=45, ha='right', fontsize=9)
+                ax.set_ylabel(f'{metric_name} Correlation (r)', fontweight='bold')
+                ax.set_title(plot_title, fontweight='bold')
+                ax.set_xlim(0.5, n_methods + 0.5)
+                ax.grid(False)
+
+                if baseline_data is not None:
+                    ax.legend(loc='upper left', fontsize=8)
+
+                return True
+            else:
+                ax.text(0.5, 0.5, 'No data available', 
+                       ha='center', va='center', transform=ax.transAxes)
+                
+            ax.set_xlabel(f'{metric_name} Correlation (r)', fontweight='bold')
+            ax.set_title(plot_title, fontweight='bold')
+            ax.grid(False)
+            ax.set_xlim(0, 1)  # Set correlation range to 0-1
+            return False
+        
+        # Get data for both platforms
+        platform_a_feat_data = feat_metrics[feat_metrics['platform'] == 'Platform_A'] if not feat_metrics.empty else pd.DataFrame()
+        platform_b_feat_data = feat_metrics[feat_metrics['platform'] == 'Platform_B'] if not feat_metrics.empty else pd.DataFrame()
+        platform_a_samp_data = sample_metrics[sample_metrics['platform'] == 'Platform_A'] if not sample_metrics.empty else pd.DataFrame()
+        platform_b_samp_data = sample_metrics[sample_metrics['platform'] == 'Platform_B'] if not sample_metrics.empty else pd.DataFrame()
+        
+        # Create 4 separate vertical violin plots
+        create_single_platform_vertical_violin_plot_with_stats(
+            ax1, platform_a_feat_data, 'Feature-wise', 
+            f'Feature-wise: {data.platform_a_name}', data.platform_a_name)
+        create_single_platform_vertical_violin_plot_with_stats(
+            ax2, platform_b_feat_data, 'Feature-wise', 
+            f'Feature-wise: {data.platform_b_name}', data.platform_b_name)
+        create_single_platform_vertical_violin_plot_with_stats(
+            ax3, platform_a_samp_data, 'Sample-wise', 
+            f'Sample-wise: {data.platform_a_name}', data.platform_a_name)
+        create_single_platform_vertical_violin_plot_with_stats(
+            ax4, platform_b_samp_data, 'Sample-wise', 
+            f'Sample-wise: {data.platform_b_name}', data.platform_b_name)
+        
+        # Add overall legend
+        legend_elements = [
+            plt.Line2D([0], [0], color='red', lw=2, label='Mean'),
+            plt.Line2D([0], [0], color='blue', lw=2, label='Median'),
+            plt.Line2D([0], [0], color='gray', lw=1.5, label='Min/Max'),
+            plt.Line2D([0], [0], color=colors[3], lw=3, linestyle='--', label='Method 4 Baseline')
+        ]
+        ax1.legend(handles=legend_elements, loc='upper right', fontsize=8)
+        
+        plt.tight_layout()
+        return fig
+    
     def generate_figure_4_bland_altman(self, data: AnalysisData):
         """Figure 4: Bland-Altman plots for bias assessment - separate subplot for each method"""
         print("Generating Figure 4: Bland-Altman plots...")
@@ -2216,6 +2445,18 @@ class ComparativeAnalyzer:
                               for method_key, method_name, platform, truth, imputed in available_methods 
                               if platform == 'Platform_B']
         
+        # Exclude Method 4 (permuted baseline) from bias comparison
+        platform_a_methods = [
+            (method_key, method_name, truth, imputed)
+            for (method_key, method_name, truth, imputed) in platform_a_methods
+            if method_key != 'Method_4'
+        ]
+        platform_b_methods = [
+            (method_key, method_name, truth, imputed)
+            for (method_key, method_name, truth, imputed) in platform_b_methods
+            if method_key != 'Method_4'
+        ]
+        
         if len(platform_a_methods) == 0 and len(platform_b_methods) == 0:
             print("No methods available for bias comparison")
             return plt.figure()
@@ -2372,6 +2613,253 @@ class ComparativeAnalyzer:
         plt.tight_layout()
         return fig
     
+    def generate_figure_4c_bland_altman_density(self, data: AnalysisData):
+        """Figure 4c: Bland-Altman density plots (high-resolution) - one subplot per method"""
+        print("Generating Figure 4c: Bland-Altman density plots...")
+
+        # Get all available methods
+        available_methods = self._get_available_methods(data)
+
+        # Group methods by platform to ensure consistent scaling
+        platform_a_methods = [(method_key, method_name, truth, imputed)
+                              for method_key, method_name, platform, truth, imputed in available_methods
+                              if platform == 'Platform_A']
+        platform_b_methods = [(method_key, method_name, truth, imputed)
+                              for method_key, method_name, platform, truth, imputed in available_methods
+                              if platform == 'Platform_B']
+
+        n_methods_a = len(platform_a_methods)
+        n_methods_b = len(platform_b_methods)
+        total_methods = n_methods_a + n_methods_b
+
+        if total_methods == 0:
+            print("No methods available for Bland-Altman density analysis")
+            return plt.figure()
+
+        # Create subplots: 2 rows (one for each platform), methods as columns
+        max_methods_per_platform = max(n_methods_a, n_methods_b, 1)
+        fig, axes = plt.subplots(2, max_methods_per_platform, figsize=(5*max_methods_per_platform, 10))
+
+        # Handle single column case
+        if max_methods_per_platform == 1:
+            axes = axes.reshape(2, 1)
+
+        # Make all plots square
+        for i in range(2):
+            for j in range(max_methods_per_platform):
+                axes[i, j].set_aspect('equal', adjustable='box')
+
+        fig.suptitle('Bland-Altman Analysis (Density): Individual Method Comparison', fontsize=16, fontweight='bold')
+
+        # Calculate global limits for each platform
+        def get_platform_limits(methods):
+            all_truth_vals = []
+            all_diff_vals = []
+            for method_key, method_name, truth, imputed in methods:
+                truth_flat = truth.values.flatten()
+                imp_flat = imputed.values.flatten()
+                mask = ~(np.isnan(truth_flat) | np.isnan(imp_flat))
+                truth_clean = truth_flat[mask]
+                imp_clean = imp_flat[mask]
+                diff_clean = imp_clean - truth_clean
+                if truth_clean.size:
+                    all_truth_vals.extend(truth_clean)
+                    all_diff_vals.extend(diff_clean)
+            if all_truth_vals:
+                truth_min, truth_max = np.min(all_truth_vals), np.max(all_truth_vals)
+                diff_min, diff_max = np.min(all_diff_vals), np.max(all_diff_vals)
+                truth_range = truth_max - truth_min
+                diff_range = diff_max - diff_min
+                truth_limits = (truth_min - 0.05*truth_range, truth_max + 0.05*truth_range)
+                diff_limits = (diff_min - 0.05*diff_range, diff_max + 0.05*diff_range)
+                return truth_limits, diff_limits
+            return (0, 1), (-1, 1)
+
+        if platform_a_methods:
+            truth_limits_a, diff_limits_a = get_platform_limits(platform_a_methods)
+        else:
+            truth_limits_a, diff_limits_a = (0, 1), (-1, 1)
+
+        if platform_b_methods:
+            truth_limits_b, diff_limits_b = get_platform_limits(platform_b_methods)
+        else:
+            truth_limits_b, diff_limits_b = (0, 1), (-1, 1)
+
+        # Internal helper to render 2D density with high resolution
+        def plot_density(ax, x_vals, y_vals, xlim, ylim):
+            import matplotlib.colors as mcolors
+            # High-resolution binning
+            bins = (400, 400)
+            # Clip to limits
+            x = np.clip(x_vals, xlim[0], xlim[1])
+            y = np.clip(y_vals, ylim[0], ylim[1])
+            # 2D histogram
+            H, xedges, yedges = np.histogram2d(x, y, bins=bins, range=[xlim, ylim])
+            H = H.T
+            # Mask zero-density bins to show as white background
+            H_masked = np.ma.masked_where(H == 0, H)
+            # Build colormap with white for masked (bad) values
+            base = plt.cm.get_cmap('magma', 256)
+            cmap = mcolors.ListedColormap(base(np.linspace(0, 1, 256)))
+            cmap.set_bad('white')
+            # Log normalization on positive densities
+            vmin = H_masked.min() if H_masked.count() > 0 else 1e-6
+            vmax = H_masked.max() if H_masked.count() > 0 else 1.0
+            norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
+            extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+            ax.set_facecolor('white')
+            im = ax.imshow(H_masked, extent=extent, origin='lower', aspect='auto',
+                           cmap=cmap, norm=norm)
+            return im
+
+        # Plot Platform A methods
+        for i, (method_key, method_name, truth, imputed) in enumerate(platform_a_methods):
+            ax = axes[0, i]
+            truth_flat = truth.values.flatten()
+            imp_flat = imputed.values.flatten()
+            mask = ~(np.isnan(truth_flat) | np.isnan(imp_flat))
+            truth_clean = truth_flat[mask]
+            imp_clean = imp_flat[mask]
+            diff_vals = imp_clean - truth_clean
+
+            # Render density
+            plot_density(ax, truth_clean, diff_vals, truth_limits_a, diff_limits_a)
+
+            # Stats and reference lines
+            mean_diff = float(np.mean(diff_vals)) if diff_vals.size else 0.0
+            std_diff = float(np.std(diff_vals)) if diff_vals.size else 0.0
+            ax.axhline(mean_diff, color='black', linestyle='-', linewidth=1.5, alpha=0.9)
+            ax.axhline(mean_diff + 1.96*std_diff, color='black', linestyle='--', linewidth=1, alpha=0.8)
+            ax.axhline(mean_diff - 1.96*std_diff, color='black', linestyle='--', linewidth=1, alpha=0.8)
+            ax.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.6)
+
+            ax.set_xlim(truth_limits_a)
+            ax.set_ylim(diff_limits_a)
+            ax.set_title(f'{data.platform_a_name}\n{method_name}', fontweight='bold', fontsize=12)
+            ax.set_xlabel('Truth Value')
+            ax.set_ylabel('Imputed - Truth')
+            ax.grid(False)
+            ax.text(0.02, 0.95, f'n={len(truth_clean):,}\nBias={mean_diff:.3f}',
+                    transform=ax.transAxes, fontsize=9, va='top',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.75))
+
+        # Hide unused Platform A subplots
+        for i in range(n_methods_a, max_methods_per_platform):
+            axes[0, i].set_visible(False)
+
+        # Plot Platform B methods
+        for i, (method_key, method_name, truth, imputed) in enumerate(platform_b_methods):
+            ax = axes[1, i]
+            truth_flat = truth.values.flatten()
+            imp_flat = imputed.values.flatten()
+            mask = ~(np.isnan(truth_flat) | np.isnan(imp_flat))
+            truth_clean = truth_flat[mask]
+            imp_clean = imp_flat[mask]
+            diff_vals = imp_clean - truth_clean
+
+            plot_density(ax, truth_clean, diff_vals, truth_limits_b, diff_limits_b)
+
+            mean_diff = float(np.mean(diff_vals)) if diff_vals.size else 0.0
+            std_diff = float(np.std(diff_vals)) if diff_vals.size else 0.0
+            ax.axhline(mean_diff, color='black', linestyle='-', linewidth=1.5, alpha=0.9)
+            ax.axhline(mean_diff + 1.96*std_diff, color='black', linestyle='--', linewidth=1, alpha=0.8)
+            ax.axhline(mean_diff - 1.96*std_diff, color='black', linestyle='--', linewidth=1, alpha=0.8)
+            ax.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.6)
+
+            ax.set_xlim(truth_limits_b)
+            ax.set_ylim(diff_limits_b)
+            ax.set_title(f'{data.platform_b_name}\n{method_name}', fontweight='bold', fontsize=12)
+            ax.set_xlabel('Truth Value')
+            ax.set_ylabel('Imputed - Truth')
+            ax.grid(False)
+            ax.text(0.02, 0.95, f'n={len(truth_clean):,}\nBias={mean_diff:.3f}',
+                    transform=ax.transAxes, fontsize=9, va='top',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.75))
+
+        # Hide unused Platform B subplots
+        for i in range(n_methods_b, max_methods_per_platform):
+            axes[1, i].set_visible(False)
+
+        plt.tight_layout()
+        return fig
+
+    def generate_figure_4d_variance_vs_mean(self, data: AnalysisData):
+        """Figure 4d: Variance vs Mean plots (feature-wise and sample-wise) for both platforms"""
+        print("Generating Figure 4d: Variance vs Mean plots...")
+
+        # Prepare subplots: rows = platforms, cols = [Feature-wise, Sample-wise]
+        fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+        fig.suptitle('Variance vs Mean (Feature-wise and Sample-wise)', fontsize=16, fontweight='bold')
+
+        # Colors for up to 4 methods
+        method_colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'],
+                         NATURE_COLORS['accent'], NATURE_COLORS['alternative_1']]
+        truth_color = 'black'
+
+        # Helper to compute and plot mean-variance
+        def plot_mv(ax, matrices, labels, title):
+            eps = 1e-8
+            for idx, (mat, label) in enumerate(zip(matrices, labels)):
+                if mat is None:
+                    continue
+                # Flatten per-entity (rows for features, columns for samples handled by caller)
+                means = np.nanmean(mat, axis=1)
+                vars_ = np.nanvar(mat, axis=1)
+                color = truth_color if label == 'Truth' else method_colors[(idx-1) % len(method_colors)] if idx > 0 else method_colors[0]
+                ax.scatter(np.log10(means + eps), np.log10(vars_ + eps), s=6, alpha=0.35, c=color, edgecolors='none', rasterized=True, label=label)
+            ax.set_xlabel('log10(Mean)')
+            ax.set_ylabel('log10(Variance)')
+            ax.set_title(title, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=9)
+
+        # Platform A
+        platform_a_methods = []
+        if data.imp_a_m1 is not None:
+            platform_a_methods.append((data.imp_a_m1, data.method1_name))
+        if data.imp_a_m2 is not None:
+            platform_a_methods.append((data.imp_a_m2, data.method2_name))
+        if getattr(data, 'imp_a_m3', None) is not None and getattr(data, 'method3_name', None) is not None:
+            platform_a_methods.append((data.imp_a_m3, data.method3_name))
+        if getattr(data, 'imp_a_m4', None) is not None and getattr(data, 'method4_name', None) is not None:
+            platform_a_methods.append((data.imp_a_m4, data.method4_name))
+
+        # Feature-wise (rows = features)
+        a_feat_matrices = [data.truth_a.values] + [m.values for m, _ in platform_a_methods]
+        a_feat_labels = ['Truth'] + [name for _, name in platform_a_methods]
+        plot_mv(axes[0, 0], a_feat_matrices, a_feat_labels, f'{data.platform_a_name} - Feature-wise')
+
+        # Sample-wise (rows = samples) -> transpose
+        a_samp_matrices = [data.truth_a.values.T] + [m.values.T for m, _ in platform_a_methods]
+        a_samp_labels = ['Truth'] + [name for _, name in platform_a_methods]
+        plot_mv(axes[0, 1], a_samp_matrices, a_samp_labels, f'{data.platform_a_name} - Sample-wise')
+
+        # Platform B
+        platform_b_methods = []
+        if data.imp_b_m1 is not None:
+            platform_b_methods.append((data.imp_b_m1, data.method1_name))
+        if data.imp_b_m2 is not None:
+            platform_b_methods.append((data.imp_b_m2, data.method2_name))
+        if getattr(data, 'imp_b_m3', None) is not None and getattr(data, 'method3_name', None) is not None:
+            platform_b_methods.append((data.imp_b_m3, data.method3_name))
+        if getattr(data, 'imp_b_m4', None) is not None and getattr(data, 'method4_name', None) is not None:
+            platform_b_methods.append((data.imp_b_m4, data.method4_name))
+
+        if len(platform_b_methods) or data.truth_b is not None:
+            b_feat_matrices = [data.truth_b.values] + [m.values for m, _ in platform_b_methods]
+            b_feat_labels = ['Truth'] + [name for _, name in platform_b_methods]
+            plot_mv(axes[1, 0], b_feat_matrices, b_feat_labels, f'{data.platform_b_name} - Feature-wise')
+
+            b_samp_matrices = [data.truth_b.values.T] + [m.values.T for m, _ in platform_b_methods]
+            b_samp_labels = ['Truth'] + [name for _, name in platform_b_methods]
+            plot_mv(axes[1, 1], b_samp_matrices, b_samp_labels, f'{data.platform_b_name} - Sample-wise')
+        else:
+            # If Platform B missing, hide bottom row
+            axes[1, 0].set_visible(False)
+            axes[1, 1].set_visible(False)
+
+        plt.tight_layout()
+        return fig
     def generate_figure_5_error_ecdfs(self, data: AnalysisData):
         """Figure 5: Absolute-error empirical CDFs"""
         print("Generating Figure 5: Error ECDFs...")
@@ -3004,7 +3492,7 @@ class ComparativeAnalyzer:
             platforms = []
             data_types = []
             
-            # Platform A datasets
+            # Platform A datasets (exclude Method 4 as it's a permuted baseline)
             platform_a_datasets = {
                 'Truth_A': data.truth_a,
                 f'{data.method1_name}_A': data.imp_a_m1,
@@ -3012,10 +3500,9 @@ class ComparativeAnalyzer:
             }
             if data.imp_a_m3 is not None and data.method3_name is not None:
                 platform_a_datasets[f'{data.method3_name}_A'] = data.imp_a_m3
-            if data.imp_a_m4 is not None and data.method4_name is not None:
-                platform_a_datasets[f'{data.method4_name}_A'] = data.imp_a_m4
+            # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
             
-            # Platform B datasets  
+            # Platform B datasets (exclude Method 4 as it's a permuted baseline)
             platform_b_datasets = {
                 'Truth_B': data.truth_b,
                 f'{data.method1_name}_B': data.imp_b_m1,
@@ -3023,8 +3510,7 @@ class ComparativeAnalyzer:
             }
             if data.imp_b_m3 is not None and data.method3_name is not None:
                 platform_b_datasets[f'{data.method3_name}_B'] = data.imp_b_m3
-            if data.imp_b_m4 is not None and data.method4_name is not None:
-                platform_b_datasets[f'{data.method4_name}_B'] = data.imp_b_m4
+            # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
             
             # Process each platform separately
             for platform_name, datasets_dict in [('Platform_A', platform_a_datasets), 
@@ -3217,12 +3703,11 @@ class ComparativeAnalyzer:
         """Figure 9b: Feature-level PCA and UMAP analysis"""
         print("  Generating Figure 9b: Feature-level PCA and UMAP analysis...")
         
-        # Calculate the number of methods (2-4)
+        # Calculate the number of methods (2-3, excluding Method 4 as it's a permuted baseline)
         n_methods = 2
         if data.imp_a_m3 is not None:
             n_methods = 3
-        if data.imp_a_m4 is not None:
-            n_methods = 4
+        # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
         
         # Create figure with 2 columns (PCA, UMAP) and n_methods*2 rows (one for each platform)
         fig, axes = plt.subplots(n_methods * 2, 2, figsize=(10, 5 * n_methods * 2))
@@ -3235,7 +3720,7 @@ class ComparativeAnalyzer:
         row_idx = 0
         for platform_idx, (truth_data, platform_name) in enumerate([(data.truth_a, data.platform_a_name), 
                                                                      (data.truth_b, data.platform_b_name)]):
-            # Get method data for this platform
+            # Get method data for this platform (exclude Method 4 - it's a permuted baseline)
             method_data_list = []
             method_names = []
             
@@ -3246,8 +3731,7 @@ class ComparativeAnalyzer:
                 ]
                 if data.imp_a_m3 is not None:
                     method_data_list.append((data.imp_a_m3, data.method3_name))
-                if data.imp_a_m4 is not None:
-                    method_data_list.append((data.imp_a_m4, data.method4_name))
+                # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
             else:  # Platform B
                 method_data_list = [
                     (data.imp_b_m1, data.method1_name),
@@ -3255,8 +3739,7 @@ class ComparativeAnalyzer:
                 ]
                 if data.imp_b_m3 is not None:
                     method_data_list.append((data.imp_b_m3, data.method3_name))
-                if data.imp_b_m4 is not None:
-                    method_data_list.append((data.imp_b_m4, data.method4_name))
+                # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
             
             # Process each method for this platform
             for method_idx, (method_data, method_name) in enumerate(method_data_list):
@@ -3327,12 +3810,11 @@ class ComparativeAnalyzer:
         """Figure 9c: Feature-level PCA and UMAP with K-Means clustering"""
         print("  Generating Figure 9c: Feature-level PCA and UMAP with K-Means clustering...")
         
-        # Calculate the number of methods (2-4)
+        # Calculate the number of methods (2-3, excluding Method 4 as it's a permuted baseline)
         n_methods = 2
         if data.imp_a_m3 is not None:
             n_methods = 3
-        if data.imp_a_m4 is not None:
-            n_methods = 4
+        # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
         
         # Create figure with 2 columns (PCA, UMAP) and n_methods*2 rows
         fig, axes = plt.subplots(n_methods * 2, 2, figsize=(10, 5 * n_methods * 2))
@@ -3355,8 +3837,7 @@ class ComparativeAnalyzer:
                 ]
                 if data.imp_a_m3 is not None:
                     method_data_list.append((data.imp_a_m3, data.method3_name))
-                if data.imp_a_m4 is not None:
-                    method_data_list.append((data.imp_a_m4, data.method4_name))
+                # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
             else:  # Platform B
                 method_data_list = [
                     (data.imp_b_m1, data.method1_name),
@@ -3364,8 +3845,7 @@ class ComparativeAnalyzer:
                 ]
                 if data.imp_b_m3 is not None:
                     method_data_list.append((data.imp_b_m3, data.method3_name))
-                if data.imp_b_m4 is not None:
-                    method_data_list.append((data.imp_b_m4, data.method4_name))
+                # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
             
             # Transpose to get features as rows
             truth_features = truth_data.values
@@ -3594,8 +4074,11 @@ class ComparativeAnalyzer:
             ("figure_1_feature_r_scatter", self.generate_figure_1_feature_r_scatter),
             ("figure_2_sample_r_scatter", self.generate_figure_2_sample_r_scatter),
             ("figure_3_r_distribution_ridge", self.generate_figure_3_r_distribution_ridge),
+            ("figure_3b_vertical_violin_plots", self.generate_figure_3b_vertical_violin_plots),
             ("figure_4_bland_altman", self.generate_figure_4_bland_altman),
             ("figure_4b_bias_comparison", self.generate_figure_4b_bias_comparison),
+            ("figure_4c_bland_altman_density", self.generate_figure_4c_bland_altman_density),
+            ("figure_4d_variance_vs_mean", self.generate_figure_4d_variance_vs_mean),
             ("figure_5_error_ecdfs", self.generate_figure_5_error_ecdfs),
             ("figure_6_sample_error_heatmap", self.generate_figure_6_sample_error_heatmap),
             ("figure_7_hexbin_error_abundance", self.generate_figure_7_hexbin_error_abundance),
@@ -3618,6 +4101,7 @@ class ComparativeAnalyzer:
             ("figure_17_performance_consistency", self.generate_figure_17_performance_consistency),
             ("figure_18_method_synergy_analysis", self.generate_figure_18_method_synergy_analysis),
             ("figure_19_cross_platform_transferability", self.generate_figure_19_cross_platform_transferability),
+            ("figure_19b_cross_platform_transferability_density", self.generate_figure_19b_cross_platform_transferability_density),
             ("figure_20_feature_difficulty_profiling", self.generate_figure_20_feature_difficulty_profiling),
             ("figure_21_temporal_performance_trends", self.generate_figure_21_temporal_performance_trends),
         ]
@@ -3626,6 +4110,7 @@ class ComparativeAnalyzer:
         shared_feature_functions = [
             ("figure_22_shared_vs_unique_performance", self.generate_figure_22_shared_vs_unique_performance),
             ("figure_23_imputation_vs_concordance", self.generate_figure_23_imputation_vs_concordance),
+            ("figure_23b_imputation_vs_concordance_density", self.generate_figure_23b_imputation_vs_concordance_density),
             ("figure_24_shared_correlation_structure", self.generate_figure_24_shared_correlation_structure),
             ("figure_25_cross_platform_feature_correlation", self.generate_figure_25_cross_platform_feature_correlation),
         ]
@@ -3636,7 +4121,11 @@ class ComparativeAnalyzer:
         for fig_name, fig_func in figure_functions:
             try:
                 fig = fig_func(data)
-                self.save_figure(fig, fig_name)
+                # Save figure 4c at higher dpi for small dense regions
+                if fig_name == "figure_4c_bland_altman_density":
+                    self.save_figure(fig, fig_name, dpi=600)
+                else:
+                    self.save_figure(fig, fig_name)
                 plt.close(fig)
                 generated_figures.append(fig_name)
             except Exception as e:
@@ -4622,110 +5111,338 @@ class ComparativeAnalyzer:
         """Figure 19: Cross-platform transferability analysis"""
         print("Generating Figure 19: Cross-platform transferability...")
         
-        # Check if we have overlapping features
+        # Check overlapping features for feature-wise analysis
         overlapping_features = getattr(self, 'overlapping_features', [])
         if not overlapping_features:
-            print("    ⚠️  No overlapping features between platforms - cannot perform cross-platform transferability analysis")
-            fig, ax = plt.subplots(figsize=(8, 8))
-            ax.text(0.5, 0.5, f'Cross-Platform Transferability Analysis\n\nCannot be performed:\nNo overlapping features between\n{data.platform_a_name} and {data.platform_b_name}', 
-                   ha='center', va='center', transform=ax.transAxes, fontsize=12,
-                   bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.7))
-            ax.set_title('Cross-Platform Performance Transferability')
-            ax.axis('off')
-            return fig
-        
-        print(f"    Using {len(overlapping_features)} overlapping features for transferability analysis")
-        
-        # Compare how well methods transfer performance across platforms
+            print("    ⚠️  No overlapping features between platforms - feature-wise transferability will be skipped")
+        else:
+            print(f"    Using {len(overlapping_features)} overlapping features for feature-wise analysis")
+
+        # Determine overlapping samples for sample-wise analysis
+        samples_a = set(data.truth_a.columns)
+        samples_b = set(data.truth_b.columns)
+        overlapping_samples = sorted(list(samples_a.intersection(samples_b)))
+        if not overlapping_samples:
+            print("    ⚠️  No overlapping samples between platforms - sample-wise transferability will be skipped")
+        else:
+            print(f"    Using {len(overlapping_samples)} overlapping samples for sample-wise analysis")
+
+        # Metrics
         feat_metrics = data.metrics['feature_wise']
-        
-        # Get performance on both platforms for each method, but only for overlapping features
-        platform_a_data = feat_metrics[feat_metrics['platform'] == 'Platform_A']
-        platform_b_data = feat_metrics[feat_metrics['platform'] == 'Platform_B']
-        
-        # Filter to only overlapping features
-        platform_a_data = platform_a_data[platform_a_data['feature'].isin(overlapping_features)]
-        platform_b_data = platform_b_data[platform_b_data['feature'].isin(overlapping_features)]
-        
-        if len(platform_a_data) == 0 or len(platform_b_data) == 0:
-            print("    ⚠️  No feature metrics available for overlapping features")
-            fig, ax = plt.subplots(figsize=(8, 8))
-            ax.text(0.5, 0.5, f'Cross-Platform Transferability Analysis\n\nInsufficient data:\nNo metrics for overlapping features', 
-                   ha='center', va='center', transform=ax.transAxes, fontsize=12,
-                   bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
-            ax.set_title('Cross-Platform Performance Transferability')
-            ax.axis('off')
-            return fig
-        
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 10))
+        samp_metrics = data.metrics['sample_wise']
+
+        # Prepare dataframes filtered to overlap
+        if overlapping_features:
+            feat_a = feat_metrics[(feat_metrics['platform'] == 'Platform_A') & (feat_metrics['feature'].isin(overlapping_features))]
+            feat_b = feat_metrics[(feat_metrics['platform'] == 'Platform_B') & (feat_metrics['feature'].isin(overlapping_features))]
+        else:
+            feat_a = feat_metrics[feat_metrics['platform'] == 'Platform_A'].iloc[0:0]
+            feat_b = feat_metrics[feat_metrics['platform'] == 'Platform_B'].iloc[0:0]
+
+        if overlapping_samples:
+            samp_a = samp_metrics[(samp_metrics['platform'] == 'Platform_A') & (samp_metrics['sample'].isin(overlapping_samples))]
+            samp_b = samp_metrics[(samp_metrics['platform'] == 'Platform_B') & (samp_metrics['sample'].isin(overlapping_samples))]
+        else:
+            samp_a = samp_metrics[samp_metrics['platform'] == 'Platform_A'].iloc[0:0]
+            samp_b = samp_metrics[samp_metrics['platform'] == 'Platform_B'].iloc[0:0]
+
+        # Create a 2x4 grid: Row 1 feature-wise (scatter + rank) for two methods; Row 2 sample-wise (scatter + rank) for two methods
+        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
         fig.suptitle('Cross-Platform Performance Transferability', fontsize=14, fontweight='bold')
-        
-        for i, method in enumerate(['Method_1', 'Method_2']):
-            method_name = data.method1_name if method == 'Method_1' else data.method2_name
-            
-            # Get data for this method
-            method_a = platform_a_data[platform_a_data['method'] == method].set_index('feature')['r']
-            method_b = platform_b_data[platform_b_data['method'] == method].set_index('feature')['r']
-            
-            # Find common features
-            common_features = method_a.index.intersection(method_b.index)
-            if len(common_features) > 0:
-                a_vals = method_a.loc[common_features]
-                b_vals = method_b.loc[common_features]
-                
-                # Cross-platform correlation
-                ax = ax1 if i == 0 else ax2
-                
-                ax.scatter(a_vals, b_vals, alpha=0.6, s=30, 
-                          color=NATURE_COLORS['primary'] if i == 0 else NATURE_COLORS['secondary'])
-                
-                # Add diagonal and stats
-                min_val = min(a_vals.min(), b_vals.min())
-                max_val = max(a_vals.max(), b_vals.max())
-                ax.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5)
-                
-                # Calculate correlation
-                corr, _ = pearsonr(a_vals, b_vals)
-                ax.text(0.05, 0.95, f'r = {corr:.3f}\nn = {len(common_features)}', transform=ax.transAxes,
-                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-                
-                ax.set_xlabel(f'{data.platform_a_name} Performance')
-                ax.set_ylabel(f'{data.platform_b_name} Performance')
-                ax.set_title(f'{method_name} - Cross-Platform Consistency')
-                ax.grid(True, alpha=0.3)
-                
-                # Transferability ranking
-                ax_rank = ax3 if i == 0 else ax4
-                
-                # Calculate relative ranking preservation
+
+        method_info = [
+            ('Method_1', data.method1_name, NATURE_COLORS['primary']),
+            ('Method_2', data.method2_name, NATURE_COLORS['secondary'])
+        ]
+
+        # Helper to plot scatter and rank hist given series
+        def _plot_pair(ax_scatter, ax_rank, a_series, b_series, title_prefix, color):
+            if len(a_series) > 0 and len(b_series) > 0:
+                # Align indices
+                common_idx = a_series.index.intersection(b_series.index)
+                if len(common_idx) == 0:
+                    ax_scatter.text(0.5, 0.5, 'No overlapping items', ha='center', va='center', transform=ax_scatter.transAxes)
+                    ax_rank.text(0.5, 0.5, 'No overlapping items', ha='center', va='center', transform=ax_rank.transAxes)
+                    return
+                a_vals = a_series.loc[common_idx]
+                b_vals = b_series.loc[common_idx]
+                ax_scatter.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color)
+                min_val = float(min(a_vals.min(), b_vals.min()))
+                max_val = float(max(a_vals.max(), b_vals.max()))
+                ax_scatter.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5)
+                try:
+                    corr, _ = pearsonr(a_vals, b_vals)
+                except Exception:
+                    corr = np.nan
+                ax_scatter.text(0.05, 0.95, f'r = {corr:.3f}\nn = {len(common_idx)}', transform=ax_scatter.transAxes,
+                                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                ax_scatter.set_xlabel(f"{data.platform_a_name} Performance")
+                ax_scatter.set_ylabel(f"{data.platform_b_name} Performance")
+                ax_scatter.set_title(f"{title_prefix} - Cross-Platform Consistency")
+                ax_scatter.grid(True, alpha=0.3)
+
+                # Rank difference
                 rank_a = a_vals.rank()
                 rank_b = b_vals.rank()
                 rank_diff = np.abs(rank_a - rank_b)
-                
-                ax_rank.hist(rank_diff, bins=min(20, len(rank_diff)//2), alpha=0.6, density=True,
-                           color=NATURE_COLORS['primary'] if i == 0 else NATURE_COLORS['secondary'])
-                
+                bins = max(5, min(20, int(len(rank_diff) // 2))) if len(rank_diff) > 1 else 5
+                ax_rank.hist(rank_diff, bins=bins, alpha=0.6, density=True, color=color)
                 ax_rank.set_xlabel(f'Rank Difference (|{data.platform_a_name} - {data.platform_b_name}|)')
                 ax_rank.set_ylabel('Density')
-                ax_rank.set_title(f'{method_name} - Ranking Consistency')
-                ax_rank.text(0.7, 0.8, f'Mean Rank Δ: {rank_diff.mean():.1f}', 
-                           transform=ax_rank.transAxes,
-                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                ax_rank.set_title(f'{title_prefix} - Ranking Consistency')
+                ax_rank.text(0.7, 0.8, f'Mean Rank Δ: {float(rank_diff.mean()):.1f}', transform=ax_rank.transAxes,
+                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
                 ax_rank.grid(True, alpha=0.3)
             else:
-                # No common features for this method
-                ax = ax1 if i == 0 else ax2
-                ax_rank = ax3 if i == 0 else ax4
-                
-                ax.text(0.5, 0.5, f'No data for {method_name}', 
-                       ha='center', va='center', transform=ax.transAxes, fontsize=12)
-                ax.set_title(f'{method_name} - Cross-Platform Consistency')
-                
-                ax_rank.text(0.5, 0.5, f'No data for {method_name}', 
-                           ha='center', va='center', transform=ax_rank.transAxes, fontsize=12)
-                ax_rank.set_title(f'{method_name} - Ranking Consistency')
-        
+                ax_scatter.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax_scatter.transAxes)
+                ax_rank.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax_rank.transAxes)
+
+        # Plot for each method
+        for i, (method_key, method_name, color) in enumerate(method_info):
+            # Feature-wise
+            ax_scatter = axes[0, i * 2]
+            ax_rank = axes[0, i * 2 + 1]
+            if overlapping_features:
+                series_a = feat_a[feat_a['method'] == method_key].set_index('feature')['r']
+                series_b = feat_b[feat_b['method'] == method_key].set_index('feature')['r']
+                _plot_pair(ax_scatter, ax_rank, series_a, series_b, f'{method_name} (Feature-wise)', color)
+            else:
+                ax_scatter.text(0.5, 0.5, 'No overlapping features', ha='center', va='center', transform=ax_scatter.transAxes)
+                ax_rank.text(0.5, 0.5, 'No overlapping features', ha='center', va='center', transform=ax_rank.transAxes)
+
+            # Sample-wise
+            ax_scatter_s = axes[1, i * 2]
+            ax_rank_s = axes[1, i * 2 + 1]
+            if overlapping_samples:
+                s_series_a = samp_a[samp_a['method'] == method_key].set_index('sample')['r']
+                s_series_b = samp_b[samp_b['method'] == method_key].set_index('sample')['r']
+                _plot_pair(ax_scatter_s, ax_rank_s, s_series_a, s_series_b, f'{method_name} (Sample-wise)', color)
+            else:
+                ax_scatter_s.text(0.5, 0.5, 'No overlapping samples', ha='center', va='center', transform=ax_scatter_s.transAxes)
+                ax_rank_s.text(0.5, 0.5, 'No overlapping samples', ha='center', va='center', transform=ax_rank_s.transAxes)
+
         plt.tight_layout()
+        return fig
+    
+    def generate_figure_19b_cross_platform_transferability_density(self, data: AnalysisData):
+        """Figure 19b: Cross-platform transferability analysis with density plots"""
+        print("Generating Figure 19b: Cross-platform transferability (density plots)...")
+        
+        # Overlapping features for feature-wise
+        overlapping_features = getattr(self, 'overlapping_features', [])
+        if not overlapping_features:
+            print("    ⚠️  No overlapping features between platforms - feature-wise density will be skipped")
+        else:
+            print(f"    Using {len(overlapping_features)} overlapping features for feature-wise density analysis")
+
+        # Overlapping samples for sample-wise
+        samples_a = set(data.truth_a.columns)
+        samples_b = set(data.truth_b.columns)
+        overlapping_samples = sorted(list(samples_a.intersection(samples_b)))
+        if not overlapping_samples:
+            print("    ⚠️  No overlapping samples between platforms - sample-wise density will be skipped")
+        else:
+            print(f"    Using {len(overlapping_samples)} overlapping samples for sample-wise density analysis")
+
+        feat_metrics = data.metrics['feature_wise']
+        samp_metrics = data.metrics['sample_wise']
+
+        # Filtered views
+        if overlapping_features:
+            feat_a = feat_metrics[(feat_metrics['platform'] == 'Platform_A') & (feat_metrics['feature'].isin(overlapping_features))]
+            feat_b = feat_metrics[(feat_metrics['platform'] == 'Platform_B') & (feat_metrics['feature'].isin(overlapping_features))]
+        else:
+            feat_a = feat_metrics[feat_metrics['platform'] == 'Platform_A'].iloc[0:0]
+            feat_b = feat_metrics[feat_metrics['platform'] == 'Platform_B'].iloc[0:0]
+
+        if overlapping_samples:
+            samp_a = samp_metrics[(samp_metrics['platform'] == 'Platform_A') & (samp_metrics['sample'].isin(overlapping_samples))]
+            samp_b = samp_metrics[(samp_metrics['platform'] == 'Platform_B') & (samp_metrics['sample'].isin(overlapping_samples))]
+        else:
+            samp_a = samp_metrics[samp_metrics['platform'] == 'Platform_A'].iloc[0:0]
+            samp_b = samp_metrics[samp_metrics['platform'] == 'Platform_B'].iloc[0:0]
+
+        # Create a 2x4 layout mirroring Figure 19
+        fig, axes = plt.subplots(2, 4, figsize=(16, 8), constrained_layout=True)
+        fig.suptitle('Cross-Platform Performance Transferability (Density Plots)', fontsize=14, fontweight='bold')
+
+        method_info = [
+            ('Method_1', data.method1_name, NATURE_COLORS['primary']),
+            ('Method_2', data.method2_name, NATURE_COLORS['secondary'])
+        ]
+
+        # Store hexbin artists to sync color scales and add shared colorbars
+        hb_feature = [None, None]
+        hb_sample = [None, None]
+
+        for i, (method_key, method_name, color) in enumerate(method_info):
+            # Feature-wise hexbin
+            ax_feat = axes[0, i * 2]
+            if overlapping_features:
+                series_a = feat_a[feat_a['method'] == method_key].set_index('feature')['r']
+                series_b = feat_b[feat_b['method'] == method_key].set_index('feature')['r']
+                common_idx = series_a.index.intersection(series_b.index)
+                if len(common_idx) > 0:
+                    a_vals = series_a.loc[common_idx]
+                    b_vals = series_b.loc[common_idx]
+                    try:
+                        hb = ax_feat.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7)
+                        hb_feature[i] = hb
+                    except Exception:
+                        ax_feat.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color)
+                    min_val = float(min(a_vals.min(), b_vals.min()))
+                    max_val = float(max(a_vals.max(), b_vals.max()))
+                    ax_feat.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8, linewidth=2)
+                    try:
+                        corr, _ = pearsonr(a_vals, b_vals)
+                    except Exception:
+                        corr = np.nan
+                    ax_feat.text(0.05, 0.95, f'r = {corr:.3f}\nn = {len(common_idx)}', transform=ax_feat.transAxes,
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                else:
+                    ax_feat.text(0.5, 0.5, 'No overlapping features', ha='center', va='center', transform=ax_feat.transAxes)
+            else:
+                ax_feat.text(0.5, 0.5, 'No overlapping features', ha='center', va='center', transform=ax_feat.transAxes)
+            ax_feat.set_xlabel(f'{data.platform_a_name} Performance')
+            ax_feat.set_ylabel(f'{data.platform_b_name} Performance')
+            ax_feat.set_title(f'{method_name} (Feature-wise) - Cross-Platform Consistency')
+            ax_feat.grid(True, alpha=0.3)
+
+            # Feature-wise rank density (KDE/hist)
+            ax_feat_rank = axes[0, i * 2 + 1]
+            if overlapping_features:
+                series_a = feat_a[feat_a['method'] == method_key].set_index('feature')['r']
+                series_b = feat_b[feat_b['method'] == method_key].set_index('feature')['r']
+                common_idx = series_a.index.intersection(series_b.index)
+                if len(common_idx) > 0:
+                    a_vals = series_a.loc[common_idx]
+                    b_vals = series_b.loc[common_idx]
+                    rank_a = a_vals.rank()
+                    rank_b = b_vals.rank()
+                    rank_diff = np.abs(rank_a - rank_b)
+                    try:
+                        from scipy.stats import gaussian_kde
+                        if len(rank_diff) > 1 and rank_diff.std() > 0:
+                            kde = gaussian_kde(rank_diff)
+                            x_range = np.linspace(rank_diff.min(), rank_diff.max(), 100)
+                            density = kde(x_range)
+                            ax_feat_rank.fill_between(x_range, density, alpha=0.6, color=color)
+                            ax_feat_rank.plot(x_range, density, color=color, linewidth=2)
+                        else:
+                            ax_feat_rank.hist(rank_diff, bins=max(5, min(20, int(len(rank_diff)//2))), alpha=0.6, density=True, color=color)
+                    except Exception:
+                        ax_feat_rank.hist(rank_diff, bins=max(5, min(20, int(len(rank_diff)//2))), alpha=0.6, density=True, color=color)
+                    ax_feat_rank.text(0.7, 0.8, f'Mean Rank Δ: {float(rank_diff.mean()):.1f}', transform=ax_feat_rank.transAxes,
+                                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                else:
+                    ax_feat_rank.text(0.5, 0.5, 'No overlapping features', ha='center', va='center', transform=ax_feat_rank.transAxes)
+            else:
+                ax_feat_rank.text(0.5, 0.5, 'No overlapping features', ha='center', va='center', transform=ax_feat_rank.transAxes)
+            ax_feat_rank.set_xlabel(f'Rank Difference (|{data.platform_a_name} - {data.platform_b_name}|)')
+            ax_feat_rank.set_ylabel('Density')
+            ax_feat_rank.set_title(f'{method_name} (Feature-wise) - Ranking Consistency')
+            ax_feat_rank.grid(True, alpha=0.3)
+
+            # Sample-wise hexbin
+            ax_samp = axes[1, i * 2]
+            if overlapping_samples:
+                s_a = samp_a[samp_a['method'] == method_key].set_index('sample')['r']
+                s_b = samp_b[samp_b['method'] == method_key].set_index('sample')['r']
+                common_idx = s_a.index.intersection(s_b.index)
+                if len(common_idx) > 0:
+                    a_vals = s_a.loc[common_idx]
+                    b_vals = s_b.loc[common_idx]
+                    try:
+                        hb = ax_samp.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7)
+                        hb_sample[i] = hb
+                    except Exception:
+                        ax_samp.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color)
+                    min_val = float(min(a_vals.min(), b_vals.min()))
+                    max_val = float(max(a_vals.max(), b_vals.max()))
+                    ax_samp.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8, linewidth=2)
+                    try:
+                        corr, _ = pearsonr(a_vals, b_vals)
+                    except Exception:
+                        corr = np.nan
+                    ax_samp.text(0.05, 0.95, f'r = {corr:.3f}\nn = {len(common_idx)}', transform=ax_samp.transAxes,
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                else:
+                    ax_samp.text(0.5, 0.5, 'No overlapping samples', ha='center', va='center', transform=ax_samp.transAxes)
+            else:
+                ax_samp.text(0.5, 0.5, 'No overlapping samples', ha='center', va='center', transform=ax_samp.transAxes)
+            ax_samp.set_xlabel(f'{data.platform_a_name} Performance')
+            ax_samp.set_ylabel(f'{data.platform_b_name} Performance')
+            ax_samp.set_title(f'{method_name} (Sample-wise) - Cross-Platform Consistency')
+            ax_samp.grid(True, alpha=0.3)
+
+            # Sample-wise rank density
+            ax_samp_rank = axes[1, i * 2 + 1]
+            if overlapping_samples:
+                s_a = samp_a[samp_a['method'] == method_key].set_index('sample')['r']
+                s_b = samp_b[samp_b['method'] == method_key].set_index('sample')['r']
+                common_idx = s_a.index.intersection(s_b.index)
+                if len(common_idx) > 0:
+                    a_vals = s_a.loc[common_idx]
+                    b_vals = s_b.loc[common_idx]
+                    rank_a = a_vals.rank()
+                    rank_b = b_vals.rank()
+                    rank_diff = np.abs(rank_a - rank_b)
+                    try:
+                        from scipy.stats import gaussian_kde
+                        if len(rank_diff) > 1 and rank_diff.std() > 0:
+                            kde = gaussian_kde(rank_diff)
+                            x_range = np.linspace(rank_diff.min(), rank_diff.max(), 100)
+                            density = kde(x_range)
+                            ax_samp_rank.fill_between(x_range, density, alpha=0.6, color=color)
+                            ax_samp_rank.plot(x_range, density, color=color, linewidth=2)
+                        else:
+                            ax_samp_rank.hist(rank_diff, bins=max(5, min(20, int(len(rank_diff)//2))), alpha=0.6, density=True, color=color)
+                    except Exception:
+                        ax_samp_rank.hist(rank_diff, bins=max(5, min(20, int(len(rank_diff)//2))), alpha=0.6, density=True, color=color)
+                    ax_samp_rank.text(0.7, 0.8, f'Mean Rank Δ: {float(rank_diff.mean()):.1f}', transform=ax_samp_rank.transAxes,
+                                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                else:
+                    ax_samp_rank.text(0.5, 0.5, 'No overlapping samples', ha='center', va='center', transform=ax_samp_rank.transAxes)
+            else:
+                ax_samp_rank.text(0.5, 0.5, 'No overlapping samples', ha='center', va='center', transform=ax_samp_rank.transAxes)
+            ax_samp_rank.set_xlabel(f'Rank Difference (|{data.platform_a_name} - {data.platform_b_name}|)')
+            ax_samp_rank.set_ylabel('Density')
+            ax_samp_rank.set_title(f'{method_name} (Sample-wise) - Ranking Consistency')
+            ax_samp_rank.grid(True, alpha=0.3)
+
+        # Enforce square subplots (not including colorbars)
+        for ax in axes.ravel():
+            try:
+                ax.set_box_aspect(1)
+            except Exception:
+                pass
+
+        # Synchronize and add shared colorbars for feature-wise hexbin pair
+        if any(hb_feature):
+            arrays = [hb.get_array() for hb in hb_feature if hb is not None]
+            vmax = max(float(arr.max()) for arr in arrays) if arrays else None
+            if vmax is not None and vmax > 0:
+                for hb in hb_feature:
+                    if hb is not None:
+                        hb.set_clim(0, vmax)
+                # Shared colorbar across the two feature-wise hexbin axes
+                feat_axes = [axes[0, 0], axes[0, 2]]
+                cb = fig.colorbar(next(h for h in hb_feature if h is not None), ax=feat_axes, location='right', shrink=0.8)
+                cb.set_label('Count')
+
+        # Synchronize and add shared colorbars for sample-wise hexbin pair
+        if any(hb_sample):
+            arrays = [hb.get_array() for hb in hb_sample if hb is not None]
+            vmax = max(float(arr.max()) for arr in arrays) if arrays else None
+            if vmax is not None and vmax > 0:
+                for hb in hb_sample:
+                    if hb is not None:
+                        hb.set_clim(0, vmax)
+                samp_axes = [axes[1, 0], axes[1, 2]]
+                cb = fig.colorbar(next(h for h in hb_sample if h is not None), ax=samp_axes, location='right', shrink=0.8)
+                cb.set_label('Count')
+
+        # With constrained_layout=True, avoid calling tight_layout to preserve square axes
         return fig
     
     def generate_figure_20_feature_difficulty_profiling(self, data: AnalysisData):
@@ -5373,6 +6090,153 @@ class ComparativeAnalyzer:
                                   xytext=(5, -15), textcoords='offset points',
                                   fontsize=7, alpha=0.8,
                                   bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7))
+                    
+                    ax.set_xlim(-0.05, 1.05)
+                    ax.set_ylim(-0.05, 1.05)
+                else:
+                    ax.text(0.5, 0.5, f'Insufficient data\n(n={len(subset)})', 
+                           ha='center', va='center', transform=ax.transAxes, fontsize=12)
+                
+                method_name = data.method1_name if method == 'Method_1' else data.method2_name
+                ax.set_title(f'{platform_name_map[platform]} - {method_name}')
+                ax.set_xlabel('Cross-Platform Concordance (r)')
+                ax.set_ylabel('Imputation Performance (r)')
+                ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        return fig
+    
+    def generate_figure_23b_imputation_vs_concordance_density(self, data: AnalysisData):
+        """Figure 23b: Imputation performance vs. cross-platform concordance with density plots"""
+        print("Generating Figure 23b: Imputation Performance vs. Cross-Platform Concordance (density plots)...")
+        
+        # Check if we have cross-platform R² data
+        if data.cross_platform_r2 is None or len(data.cross_platform_r2) == 0:
+            return self._create_insufficient_data_figure(
+                "Imputation vs. Cross-Platform Concordance (Density)",
+                "No cross-platform R² metrics available (no overlapping features)"
+            )
+        
+        print(f"    Analyzing {len(data.cross_platform_r2)} features with cross-platform data")
+        
+        # Get cross-platform correlation (already stored as r, not R²)
+        cross_platform_r = data.cross_platform_r2.rename('cross_platform_r')
+        
+        # Merge with imputation performance metrics
+        feat_metrics = data.metrics['feature_wise'].copy()
+        merged_data = feat_metrics.merge(cross_platform_r.to_frame(), left_on='feature', right_index=True, how='inner')
+        
+        if merged_data.empty:
+            return self._create_insufficient_data_figure(
+                "Imputation vs. Cross-Platform Concordance (Density)",
+                "No metrics found for overlapping features"
+            )
+        
+        # Create platform name mapping
+        platform_name_map = {
+            'Platform_A': data.platform_a_name,
+            'Platform_B': data.platform_b_name
+        }
+        
+        fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+        fig.suptitle('Imputation Performance vs. Cross-Platform Concordance (Density Plots)\n"Are stable features easier to impute?"', 
+                    fontsize=14, fontweight='bold')
+        
+        platforms = ['Platform_A', 'Platform_B']
+        methods = ['Method_1', 'Method_2']
+        colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary']]
+        
+        for i, platform in enumerate(platforms):
+            for j, method in enumerate(methods):
+                ax = axes[i, j]
+                
+                # Filter data for this platform and method
+                subset = merged_data[(merged_data['platform'] == platform) & 
+                                   (merged_data['method'] == method)]
+                
+                if len(subset) > 3:  # Need at least a few points for meaningful analysis
+                    x = subset['cross_platform_r']
+                    y = subset['r']
+                    
+                    # Check for valid data ranges
+                    if len(x.dropna()) < 3 or len(y.dropna()) < 3:
+                        ax.text(0.5, 0.5, 'Insufficient valid data', 
+                               ha='center', va='center', transform=ax.transAxes, fontsize=12)
+                        continue
+                    
+                    # Create 2D density plot
+                    try:
+                        # Create hexbin plot for density visualization
+                        hb = ax.hexbin(x, y, gridsize=15, cmap='Blues', alpha=0.8)
+                        cb = plt.colorbar(hb, ax=ax)
+                        cb.set_label('Count', rotation=270, labelpad=15)
+                    except:
+                        # Fallback to scatter if hexbin fails
+                        ax.scatter(x, y, alpha=0.6, s=30, color=colors[j], 
+                                 edgecolors='black', linewidth=0.3)
+                    
+                    # Add regression line - only if we have valid range
+                    if x.max() > x.min() and y.max() > y.min():
+                        slope, intercept, r_val, p_val, std_err = linregress(x, y)
+                        line_x = np.linspace(x.min(), x.max(), 100)
+                        line_y = slope * line_x + intercept
+                        ax.plot(line_x, line_y, 'r--', alpha=0.8, linewidth=2)
+                        
+                        # Add R² from linear regression (only if regression was performed)
+                        ax.text(0.05, 0.75, f'R² = {r_val**2:.3f}', transform=ax.transAxes, fontsize=10,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    
+                    # Calculate Spearman correlation (always perform this)
+                    try:
+                        spearman_r, spearman_p = spearmanr(x, y)
+                        
+                        # Add correlation text
+                        ax.text(0.05, 0.95, f'ρ = {spearman_r:.3f}', transform=ax.transAxes, fontsize=11,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                        ax.text(0.05, 0.85, f'p = {spearman_p:.3f}', transform=ax.transAxes, fontsize=10,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    except Exception:
+                        # Handle correlation calculation errors
+                        ax.text(0.05, 0.95, 'ρ = N/A', transform=ax.transAxes, fontsize=11,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    
+                    # Add marginal density plots
+                    try:
+                        from scipy.stats import gaussian_kde
+                        
+                        # Create marginal density plots on the edges
+                        divider = plt.subplot_mosaic([['upper', 'upper', '.'],
+                                                     ['main', 'main', 'right'],
+                                                     ['main', 'main', 'right']], 
+                                                    figure=fig, gridspec_kw={'width_ratios': [2, 2, 0.5], 
+                                                                            'height_ratios': [0.5, 2, 2]})
+                        
+                        # This is a more complex approach, so let's keep it simpler for now
+                        # and just create density contours on the main plot
+                        
+                        # Create density contours
+                        if len(x) > 5 and len(y) > 5:
+                            x_clean = x.dropna()
+                            y_clean = y.dropna()
+                            if len(x_clean) > 5 and len(y_clean) > 5:
+                                # Create a grid for contour plotting
+                                x_min, x_max = x_clean.min(), x_clean.max()
+                                y_min, y_max = y_clean.min(), y_clean.max()
+                                
+                                if x_max > x_min and y_max > y_min:
+                                    xx, yy = np.mgrid[x_min:x_max:.02, y_min:y_max:.02]
+                                    positions = np.vstack([xx.ravel(), yy.ravel()])
+                                    
+                                    # Create combined data for KDE
+                                    combined_data = np.vstack([x_clean, y_clean])
+                                    if combined_data.shape[1] > 3:  # Need enough points for KDE
+                                        kde = gaussian_kde(combined_data)
+                                        density = np.reshape(kde(positions).T, xx.shape)
+                                        
+                                        # Add contour lines
+                                        ax.contour(xx, yy, density, colors='white', alpha=0.6, linewidths=1)
+                    except:
+                        pass  # Skip density contours if they fail
                     
                     ax.set_xlim(-0.05, 1.05)
                     ax.set_ylim(-0.05, 1.05)

@@ -137,6 +137,10 @@ class ImportanceAnalysisData:
     # Self-importance vs performance correlation results
     self_importance_vs_performance: Dict = None
     
+    # Cross-platform raw correlation results and analysis
+    cross_platform_raw_correlation: pd.DataFrame = None  # Raw truth A vs truth B per-feature correlation
+    self_importance_vs_raw_correlation: Dict = None  # Correlation of self-importance vs raw cross-platform correlation
+    
     # Network analysis results
     network_a_to_b: 'nx.Graph' = None  # Network graph for A→B direction
     network_b_to_a: 'nx.Graph' = None  # Network graph for B→A direction
@@ -415,6 +419,60 @@ class ImportanceMatrixAnalyzer:
                 print(f"  Platform B performance computed for {len(data.feature_performance_b)} features")
         
         return data
+
+    def compute_cross_platform_raw_correlation(self, data: ImportanceAnalysisData) -> ImportanceAnalysisData:
+        """
+        Compute raw cross-platform Pearson correlation between truth matrices for overlapping features.
+        Expects `truth_a` and `truth_b` as DataFrames with shape (samples × features).
+
+        Returns the updated `data` with `cross_platform_raw_correlation` as a DataFrame
+        containing columns: ['feature', 'r'].
+        """
+        if data.truth_a is None or data.truth_b is None:
+            return data
+
+        print("Computing cross-platform raw correlations (truth A vs truth B)...")
+
+        features_a = set(data.truth_a.columns)
+        features_b = set(data.truth_b.columns)
+        overlapping = sorted(list(features_a & features_b))
+
+        if len(overlapping) == 0:
+            print("  No overlapping features between truth_a and truth_b")
+            data.cross_platform_raw_correlation = pd.DataFrame(columns=['feature', 'r'])
+            return data
+
+        results = []
+        for feature in overlapping:
+            vals_a = data.truth_a[feature].values
+            vals_b = data.truth_b[feature].values
+
+            mask = ~(np.isnan(vals_a) | np.isnan(vals_b))
+            if np.sum(mask) < 3:
+                continue
+
+            r, _ = pearsonr(vals_a[mask], vals_b[mask])
+            results.append({
+                'feature': feature,
+                'r': r,
+                'n_samples': int(np.sum(mask))
+            })
+
+        if not results:
+            print("  Insufficient overlapping non-NaN samples to compute correlations")
+            data.cross_platform_raw_correlation = pd.DataFrame(columns=['feature', 'r'])
+            return data
+
+        df = pd.DataFrame(results)
+
+        if data.feature_mapping:
+            print("  Applying feature mapping to cross-platform correlation features...")
+            df['feature'] = df['feature'].map(data.feature_mapping).fillna(df['feature'])
+
+        # Aggregate in case multiple IDs map to the same gene symbol
+        data.cross_platform_raw_correlation = df.groupby('feature')['r'].mean().reset_index()
+        print(f"  Cross-platform raw correlation computed for {len(data.cross_platform_raw_correlation)} features")
+        return data
     
     def analyze_self_feature_importance(self, importance_matrix: pd.DataFrame) -> Dict:
         """
@@ -567,6 +625,36 @@ class ImportanceMatrixAnalyzer:
                 direction=f"{data.platform_b_name} → {data.platform_a_name}"
             )
         
+        return results
+
+    def analyze_self_importance_vs_raw_correlation(self, data: ImportanceAnalysisData) -> Dict:
+        """
+        Analyze correlation between self-feature importance and raw cross-platform correlation (truth A vs truth B).
+
+        Reuses the generic correlation routine expecting a DataFrame with columns ['feature', 'r'].
+        """
+        print("Analyzing self-importance vs cross-platform raw correlation...")
+
+        if data.cross_platform_raw_correlation is None or len(data.cross_platform_raw_correlation) == 0:
+            print("  Cross-platform raw correlation data not available")
+            return {}
+
+        results = {}
+
+        if data.importance_a_to_b is not None:
+            results['a_to_b'] = self._correlate_importance_performance(
+                importance_matrix=data.importance_a_to_b,
+                performance_data=data.cross_platform_raw_correlation,
+                direction=f"{data.platform_a_name} → {data.platform_b_name}"
+            )
+
+        if data.importance_b_to_a is not None:
+            results['b_to_a'] = self._correlate_importance_performance(
+                importance_matrix=data.importance_b_to_a,
+                performance_data=data.cross_platform_raw_correlation,
+                direction=f"{data.platform_b_name} → {data.platform_a_name}"
+            )
+
         return results
     
     def _correlate_importance_performance(self, importance_matrix: pd.DataFrame, 
@@ -2383,6 +2471,85 @@ class ImportanceMatrixAnalyzer:
         plt.subplots_adjust(bottom=0.15, top=0.93)  # Make room for title and interpretation
         
         return self.save_figure(fig, "self_importance_vs_performance_correlation")
+
+    def plot_self_importance_vs_raw_correlation(self, data: ImportanceAnalysisData):
+        """Plot correlation between self-feature importance and raw cross-platform correlation"""
+        print("Generating self-importance vs raw cross-platform correlation plot...")
+
+        # Ensure raw cross-platform correlation is computed
+        if data.cross_platform_raw_correlation is None:
+            data = self.compute_cross_platform_raw_correlation(data)
+
+        correlation_results = self.analyze_self_importance_vs_raw_correlation(data)
+        if not correlation_results:
+            print("  No correlation data available")
+            return None
+
+        valid_results = {k: v for k, v in correlation_results.items() if v and v.get('n_features', 0) >= 3}
+        if not valid_results:
+            print("  No valid correlation data for plotting")
+            return None
+
+        n_directions = len(valid_results)
+        fig, axes = plt.subplots(1, n_directions, figsize=(6*n_directions, 5))
+        if n_directions == 1:
+            axes = np.array([axes])
+
+        col_idx = 0
+        for _, result in valid_results.items():
+            features_data = result['features_data']
+            direction_name = result['direction']
+
+            ax = axes[col_idx]
+            x = features_data['performance_r']
+            y = features_data['self_importance_score']
+
+            ax.scatter(x, y, alpha=0.7, s=14, color=COLORS['accent'], edgecolors='white', linewidth=0.8)
+
+            if len(features_data) > 2:
+                z = np.polyfit(x, y, 1)
+                p = np.poly1d(z)
+                x_trend = np.linspace(x.min(), x.max(), 100)
+                ax.plot(x_trend, p(x_trend), '--', color=COLORS['warning'], alpha=0.9, linewidth=2)
+
+            score_corr_info = result['correlation_score_performance']
+            if score_corr_info:
+                corr_text = f"r = {score_corr_info['correlation']:.3f}\n"
+                corr_text += f"p = {score_corr_info['p_value']:.3f}{'*' if score_corr_info['p_value'] < 0.05 else ''}"
+                ax.text(0.02, 0.98, corr_text, transform=ax.transAxes,
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.85),
+                        verticalalignment='top', fontsize=10)
+
+            # Label outliers (extremes)
+            try:
+                rows_to_label = [
+                    features_data.loc[x.idxmax()],
+                    features_data.loc[x.idxmin()],
+                    features_data.loc[y.idxmax()],
+                    features_data.loc[y.idxmin()],
+                ]
+                seen = set()
+                for row in rows_to_label:
+                    feat = str(row['feature'])
+                    if feat not in seen and not row.isna().any():
+                        seen.add(feat)
+                        ax.annotate(f"{feat[:12]}", (row['performance_r'], row['self_importance_score']),
+                                    xytext=(6, 6), textcoords='offset points', fontsize=8, alpha=0.85,
+                                    bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.5))
+            except Exception:
+                pass
+
+            ax.set_xlabel('Cross-Platform Raw Correlation (r)')
+            ax.set_ylabel('Self-Importance Score (higher = more important)')
+            ax.set_title(f'{direction_name}\nRaw r vs Self-Importance')
+            ax.grid(True, alpha=0.3)
+
+            col_idx += 1
+
+        fig.suptitle('Self-Importance vs Cross-Platform Raw Correlation', fontsize=16, fontweight='bold', y=0.98)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.90)
+        return self.save_figure(fig, "self_importance_vs_cross_platform_raw_correlation")
     
     def plot_importance_network(self, network: 'nx.Graph', analysis: Dict, 
                               title_prefix: str, layout_type: str = "spring") -> plt.Figure:
@@ -3911,6 +4078,11 @@ class ImportanceMatrixAnalyzer:
         # Analyze self-importance vs performance
         if data.importance_a_to_b is not None or data.importance_b_to_a is not None:
             data.self_importance_vs_performance = self.analyze_self_importance_vs_performance(data)
+
+        # Compute cross-platform raw correlations and analyze vs self-importance
+        if data.truth_a is not None and data.truth_b is not None:
+            data = self.compute_cross_platform_raw_correlation(data)
+            data.self_importance_vs_raw_correlation = self.analyze_self_importance_vs_raw_correlation(data)
         
         # Network analysis
         if NETWORKX_AVAILABLE:
@@ -4048,6 +4220,11 @@ class ImportanceMatrixAnalyzer:
             figures['self_importance_vs_performance_correlation'] = self.plot_self_importance_vs_performance_correlation(data)
         except Exception as e:
             print(f"Error generating self-importance vs performance correlation plot: {e}")
+
+        try:
+            figures['self_importance_vs_raw_correlation'] = self.plot_self_importance_vs_raw_correlation(data)
+        except Exception as e:
+            print(f"Error generating self-importance vs raw cross-platform correlation plot: {e}")
         
         # Network analysis plots
         if NETWORKX_AVAILABLE:
@@ -4421,6 +4598,9 @@ def main():
             data = analyzer.load_feature_mapping(data, args.feature_mapping)
         
         data = analyzer.compute_feature_performance(data)
+
+        # Also compute cross-platform raw correlation for overlapping proteins
+        data = analyzer.compute_cross_platform_raw_correlation(data)
     
     # Load PPI reference if provided
     if args.ppi_reference and NETWORKX_AVAILABLE:

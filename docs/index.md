@@ -47,6 +47,8 @@ Get started with cpiVAE in three simple steps:
 | [**Quality Control**](quality_control.md) | Data validation and preprocessing |
 | [**Feature Importance**](feature_importance.md) | Analyzing learned representations |
 | [**Latent Space**](latent_space.md) | Visualization and interpretation |
+| [**Confidence & Analysis**](confidence.md) | Confidence estimation and downstream analysis |
+| [**Phenotype Association**](phenotype_association.md) | Discovery and targeted phenotype associations |
 | [**Comparison**](comparison.md) | Benchmarking against baselines |
 
 ## Architecture

@@ -111,7 +111,7 @@ class AnalysisData:
 class ComparativeAnalyzer:
     """Main class for comprehensive cross-platform imputation analysis"""
     
-    def __init__(self, output_dir: str = "analysis_output"):
+    def __init__(self, output_dir: str = "analysis_output", gender_col: Optional[str] = None, age_col: Optional[str] = None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         
@@ -122,6 +122,10 @@ class ComparativeAnalyzer:
         
         self.git_hash = self._get_git_hash()
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Optional covariate columns for phenotype association adjustment
+        self.gender_col = gender_col
+        self.age_col = age_col
         
         # Initialize network analyzer if available
         self.network_analyzer = None
@@ -581,8 +585,15 @@ class ComparativeAnalyzer:
             print("  WARNING: No valid phenotype columns specified or found!")
             return data
         
-        # Keep only specified phenotype columns
-        phenotype_df = phenotype_df[all_pheno_cols]
+        # If covariate columns are specified, ensure they exist and retain them for modeling
+        covariate_cols = []
+        if self.gender_col and self.gender_col in phenotype_df.columns:
+            covariate_cols.append(self.gender_col)
+        if self.age_col and self.age_col in phenotype_df.columns:
+            covariate_cols.append(self.age_col)
+        # Keep only specified phenotype columns (plus covariates if provided)
+        keep_cols = list(dict.fromkeys(all_pheno_cols + covariate_cols)) if covariate_cols else all_pheno_cols
+        phenotype_df = phenotype_df[keep_cols]
         
         # Store in data object
         data.phenotype_data = phenotype_df
@@ -637,6 +648,28 @@ class ComparativeAnalyzer:
                     continue
                 
                 y_aligned = y[common_samples]
+                # Optional covariates (encode gender to 0/1 if provided)
+                use_gender = self.gender_col is not None and self.gender_col in data.phenotype_data.columns and phenotype != self.gender_col
+                use_age = self.age_col is not None and self.age_col in data.phenotype_data.columns and phenotype != self.age_col
+                g_numeric = None
+                a_numeric = None
+                if use_gender:
+                    g_series = data.phenotype_data.loc[common_samples, self.gender_col]
+                    # Try numeric first
+                    g_try = pd.to_numeric(g_series, errors='coerce')
+                    if pd.unique(g_try.dropna()).size == 2:
+                        g_numeric = g_try.values.astype(float)
+                    else:
+                        # Factorize strings into 0/1
+                        cats = pd.Index(sorted(pd.unique(g_series.dropna().astype(str))))
+                        if len(cats) == 2:
+                            mapping = {cat: i for i, cat in enumerate(cats)}
+                            g_numeric = g_series.astype(str).map(mapping).astype(float).values
+                        else:
+                            g_numeric = None
+                if use_age:
+                    a_series = data.phenotype_data.loc[common_samples, self.age_col]
+                    a_numeric = pd.to_numeric(a_series, errors='coerce').values.astype(float)
                 
                 # Process each feature
                 for feature in protein_data.index:
@@ -644,28 +677,43 @@ class ComparativeAnalyzer:
                         # Get feature values
                         X = protein_data.loc[feature, common_samples].values.reshape(-1, 1)
                         
-                        # Remove samples with missing feature values
+                        # Remove samples with missing values in feature/covariates
                         mask = ~np.isnan(X.flatten())
+                        if use_gender and g_numeric is not None:
+                            mask &= np.isfinite(g_numeric)
+                        if use_age and a_numeric is not None:
+                            mask &= np.isfinite(a_numeric)
                         X_clean = X[mask]
                         y_clean = y_aligned.values[mask]
                         
                         if len(np.unique(y_clean)) < 2 or len(X_clean) < 10:
                             continue
                         
-                        # Standardize features
-                        X_scaled = StandardScaler().fit_transform(X_clean.reshape(-1, 1))
+                        # Build design matrix: feature + optional covariates
+                        X_feature = StandardScaler().fit_transform(X_clean.reshape(-1, 1))
+                        cov_cols = []
+                        if use_gender and g_numeric is not None:
+                            cov_cols.append(g_numeric[mask])
+                        if use_age and a_numeric is not None:
+                            a = a_numeric[mask]
+                            a = StandardScaler().fit_transform(a.reshape(-1, 1)).flatten()
+                            cov_cols.append(a)
+                        if cov_cols:
+                            X_design = np.column_stack([X_feature.flatten()] + cov_cols)
+                        else:
+                            X_design = X_feature
                         
-                        # Fit logistic regression
                         lr = LogisticRegression(max_iter=1000, solver='lbfgs')
-                        lr.fit(X_scaled, y_clean)
+                        lr.fit(X_design, y_clean)
                         
                         # Get coefficient and confidence interval
                         coef = lr.coef_[0][0]
                         
                         # Calculate standard error using inverse Fisher information
-                        probs = lr.predict_proba(X_scaled)[:, 1]
+                        probs = lr.predict_proba(X_design)[:, 1]
                         weights = probs * (1 - probs)
-                        X_weighted = X_scaled * np.sqrt(weights).reshape(-1, 1)
+                        X_aug = np.column_stack([X_design, np.ones(len(X_design))])
+                        X_weighted = X_aug * np.sqrt(weights).reshape(-1, 1)
                         
                         try:
                             cov = np.linalg.inv(X_weighted.T @ X_weighted)
@@ -736,6 +784,26 @@ class ComparativeAnalyzer:
                     continue
                 
                 y_aligned = y[common_samples]
+                # Optional covariates (encode gender to 0/1 if provided)
+                use_gender = self.gender_col is not None and self.gender_col in data.phenotype_data.columns and phenotype != self.gender_col
+                use_age = self.age_col is not None and self.age_col in data.phenotype_data.columns and phenotype != self.age_col
+                g_numeric = None
+                a_numeric = None
+                if use_gender:
+                    g_series = data.phenotype_data.loc[common_samples, self.gender_col]
+                    g_try = pd.to_numeric(g_series, errors='coerce')
+                    if pd.unique(g_try.dropna()).size == 2:
+                        g_numeric = g_try.values.astype(float)
+                    else:
+                        cats = pd.Index(sorted(pd.unique(g_series.dropna().astype(str))))
+                        if len(cats) == 2:
+                            mapping = {cat: i for i, cat in enumerate(cats)}
+                            g_numeric = g_series.astype(str).map(mapping).astype(float).values
+                        else:
+                            g_numeric = None
+                if use_age:
+                    a_series = data.phenotype_data.loc[common_samples, self.age_col]
+                    a_numeric = pd.to_numeric(a_series, errors='coerce').values.astype(float)
                 
                 # Process each feature
                 for feature in protein_data.index:
@@ -743,31 +811,44 @@ class ComparativeAnalyzer:
                         # Get feature values
                         X = protein_data.loc[feature, common_samples].values.reshape(-1, 1)
                         
-                        # Remove samples with missing feature values
+                        # Remove samples with missing values in feature/covariates
                         mask = ~np.isnan(X.flatten())
+                        if use_gender and g_numeric is not None:
+                            mask &= np.isfinite(g_numeric)
+                        if use_age and a_numeric is not None:
+                            mask &= np.isfinite(a_numeric)
                         X_clean = X[mask]
                         y_clean = y_aligned.values[mask]
                         
                         if len(X_clean) < 10:
                             continue
                         
-                        # Standardize features
-                        X_scaled = StandardScaler().fit_transform(X_clean.reshape(-1, 1))
+                        # Build design: feature + optional covariates
+                        X_feature = StandardScaler().fit_transform(X_clean.reshape(-1, 1)).flatten()
                         y_scaled = StandardScaler().fit_transform(y_clean.reshape(-1, 1)).flatten()
+                        cov_cols = []
+                        if use_gender and g_numeric is not None:
+                            cov_cols.append(g_numeric[mask])
+                        if use_age and a_numeric is not None:
+                            a = a_numeric[mask]
+                            a = StandardScaler().fit_transform(a.reshape(-1, 1)).flatten()
+                            cov_cols.append(a)
+                        if cov_cols:
+                            X = np.column_stack([X_feature] + cov_cols + [np.ones_like(X_feature)])
+                        else:
+                            X = np.column_stack([X_feature, np.ones_like(X_feature)])
                         
-                        # Fit linear regression
-                        lr = LinearRegression()
-                        lr.fit(X_scaled, y_scaled)
-                        
-                        # Get coefficient
-                        beta = lr.coef_[0]
-                        
-                        # Calculate standard error
-                        y_pred = lr.predict(X_scaled)
+                        # OLS via normal equations
+                        XtX = X.T @ X
+                        XtX_inv = np.linalg.inv(XtX)
+                        beta_vec = XtX_inv @ (X.T @ y_scaled)
+                        beta = beta_vec[0]
+                        y_pred = X @ beta_vec
                         residuals = y_scaled - y_pred
-                        mse = np.mean(residuals**2)
-                        var_beta = mse / np.sum((X_scaled - X_scaled.mean())**2)
-                        se = np.sqrt(var_beta)
+                        n = X.shape[0]
+                        p = X.shape[1]
+                        mse = (residuals @ residuals) / (n - p)
+                        se = np.sqrt(np.maximum(mse * XtX_inv[0, 0], 0.0))
                         
                         # Calculate confidence interval
                         ci_lower = beta - 1.96 * se
@@ -775,11 +856,13 @@ class ComparativeAnalyzer:
                         
                         # Calculate p-value (t-test)
                         t_stat = beta / se if se > 0 else np.nan
-                        df = len(X_clean) - 2
+                        df = n - p
                         p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df)) if not np.isnan(t_stat) else np.nan
                         
                         # Calculate R-squared
-                        r_squared = lr.score(X_scaled, y_scaled)
+                        ss_res = residuals @ residuals
+                        ss_tot = ((y_scaled - y_scaled.mean()) @ (y_scaled - y_scaled.mean()))
+                        r_squared = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else np.nan
                         
                         pheno_results.append({
                             'feature': feature,
@@ -812,8 +895,10 @@ class ComparativeAnalyzer:
             if len(truth_results) == 0:
                 continue
             
-            # Filter for significant Truth associations only (p < 0.05)
-            significant_truth = truth_results[truth_results['p_value'] < 0.05].copy()
+            # Apply FDR and filter for significant Truth associations only (p_adj < 0.05)
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
             if len(significant_truth) == 0:
                 continue
                 
@@ -867,8 +952,10 @@ class ComparativeAnalyzer:
             if len(truth_results) == 0:
                 continue
             
-            # Filter for significant Truth associations only (p < 0.05)
-            significant_truth = truth_results[truth_results['p_value'] < 0.05].copy()
+            # Apply FDR and filter for significant Truth associations only (p_adj < 0.05)
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
             if len(significant_truth) == 0:
                 continue
                 
@@ -911,6 +998,79 @@ class ComparativeAnalyzer:
                 final_mae[method] = np.mean(values)
         
         return final_mae
+
+    def _calculate_effect_correlation_binary(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, float]:
+        """Calculate mean Spearman correlation of effect sizes (log OR) for each method vs Truth
+        using only Truth-significant features after FDR per phenotype."""
+        corr_lists: Dict[str, List[float]] = {}
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if truth_results.empty:
+                continue
+            # FDR on Truth
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            sig_truth = truth_results[truth_results['p_adj'] < 0.05].set_index('feature')
+            if sig_truth.empty:
+                continue
+            # Use log(OR) as effect size
+            truth_or = sig_truth['odds_ratio']
+            # Filter invalid ORs
+            valid_mask_truth = np.isfinite(truth_or) & (truth_or > 0)
+            sig_truth = sig_truth[valid_mask_truth]
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                method_df = results_df[results_df['method'] == method].set_index('feature')
+                common = sig_truth.index.intersection(method_df.index)
+                if len(common) == 0:
+                    continue
+                or_truth = sig_truth.loc[common, 'odds_ratio']
+                or_method = method_df.loc[common, 'odds_ratio']
+                mask = np.isfinite(or_truth) & np.isfinite(or_method) & (or_truth > 0) & (or_method > 0)
+                if mask.sum() == 0:
+                    continue
+                # Spearman on log(OR)
+                r, _ = stats.spearmanr(np.log(or_truth[mask]), np.log(or_method[mask]))
+                if method not in corr_lists:
+                    corr_lists[method] = []
+                if np.isfinite(r):
+                    corr_lists[method].append(float(r))
+        # Average across phenotypes
+        return {m: float(np.mean(v)) for m, v in corr_lists.items() if len(v) > 0}
+
+    def _calculate_effect_correlation_continuous(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, float]:
+        """Calculate mean Spearman correlation of beta coefficients for each method vs Truth
+        using only Truth-significant features after FDR per phenotype."""
+        corr_lists: Dict[str, List[float]] = {}
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if truth_results.empty:
+                continue
+            # FDR on Truth
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            sig_truth = truth_results[truth_results['p_adj'] < 0.05].set_index('feature')
+            if sig_truth.empty:
+                continue
+            beta_truth = sig_truth['beta']
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                method_df = results_df[results_df['method'] == method].set_index('feature')
+                common = sig_truth.index.intersection(method_df.index)
+                if len(common) == 0:
+                    continue
+                beta_m = method_df.loc[common, 'beta']
+                mask = np.isfinite(beta_truth.loc[common]) & np.isfinite(beta_m)
+                if mask.sum() == 0:
+                    continue
+                r, _ = stats.spearmanr(beta_truth.loc[common][mask], beta_m[mask])
+                if method not in corr_lists:
+                    corr_lists[method] = []
+                if np.isfinite(r):
+                    corr_lists[method].append(float(r))
+        return {m: float(np.mean(v)) for m, v in corr_lists.items() if len(v) > 0}
     
     def generate_figure_26_comprehensive_method_comparison(self, data: AnalysisData):
         """Figure 26: Comprehensive comparison of all available methods (mean and median correlations)"""
@@ -1021,7 +1181,11 @@ class ComparativeAnalyzer:
                     transform=ax2.transAxes, fontsize=12)
             ax2.set_title('Sample-wise Performance')
         
-        plt.tight_layout()
+        # Improve layout so rotated xtick labels are visible
+        try:
+            fig.tight_layout(rect=[0.02, 0.08, 0.98, 0.98])
+        except Exception:
+            plt.tight_layout()
         return fig
     
     def generate_figure_27_comprehensive_method_comparison_spearman(self, data: AnalysisData):
@@ -1145,24 +1309,158 @@ class ComparativeAnalyzer:
         plt.tight_layout()
         return fig
     
+    def generate_figure_28b_phenotype_summary_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 28b: Binary phenotype association summaries (MAE and effect correlation) with square panels"""
+        if not association_results:
+            print("  No binary phenotype associations to summarize")
+            return None
+        
+        mae_results = self._calculate_association_mae_binary(association_results)
+        corr_results = self._calculate_effect_correlation_binary(association_results)
+        
+        # Method colors: Truth=black, Method1=red, Method2=blue, Method3=green, Method4=yellow/orange
+        method_colors = {
+            'Truth': 'black',
+            data.method1_name: NATURE_COLORS['primary'],
+            data.method2_name: NATURE_COLORS['secondary']
+        }
+        if data.method3_name:
+            method_colors[data.method3_name] = NATURE_COLORS['accent']
+        if data.method4_name:
+            method_colors[data.method4_name] = NATURE_COLORS['highlight']
+        
+        fig, (ax_mae, ax_corr) = plt.subplots(1, 2, figsize=(12, 6))
+        fig.suptitle('Binary Phenotype Associations: MAE and Effect Correlation', fontsize=16, fontweight='bold')
+        
+        # MAE panel
+        if mae_results:
+            methods = list(mae_results.keys())
+            mae_values = [mae_results[m] for m in methods]
+            ax_mae.bar(range(len(methods)), mae_values,
+                       color=[method_colors.get(m, 'gray') for m in methods],
+                       alpha=0.7, edgecolor='black', linewidth=0.5)
+            for i, (method, value) in enumerate(zip(methods, mae_values)):
+                ax_mae.text(i, value + 0.01 * max(mae_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+            ax_mae.set_xlabel('Method')
+            ax_mae.set_ylabel('Mean Absolute Error')
+            ax_mae.set_title('MAE of Odds Ratios vs Truth (FDR<0.05)', fontweight='bold')
+            ax_mae.set_xticks(range(len(methods)))
+            ax_mae.set_xticklabels(methods, rotation=45, ha='right')
+            ax_mae.grid(True, alpha=0.3, axis='y')
+        else:
+            ax_mae.text(0.5, 0.5, 'No MAE data available', transform=ax_mae.transAxes, ha='center', va='center')
+            ax_mae.set_title('MAE of Odds Ratios vs Truth (FDR<0.05)')
+        
+        # Correlation panel
+        if corr_results:
+            methods_c = list(corr_results.keys())
+            corr_values = [corr_results[m] for m in methods_c]
+            ax_corr.bar(range(len(methods_c)), corr_values,
+                        color=[method_colors.get(m, 'gray') for m in methods_c],
+                        alpha=0.7, edgecolor='black', linewidth=0.5)
+            for i, (method, value) in enumerate(zip(methods_c, corr_values)):
+                ax_corr.text(i, value + 0.01 * max(corr_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+            ax_corr.set_xlabel('Method')
+            ax_corr.set_ylabel('Spearman r (log OR)')
+            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)', fontweight='bold')
+            ax_corr.set_xticks(range(len(methods_c)))
+            ax_corr.set_xticklabels(methods_c, rotation=45, ha='right')
+            ax_corr.grid(True, alpha=0.3, axis='y')
+        else:
+            ax_corr.text(0.5, 0.5, 'No correlation data available', transform=ax_corr.transAxes, ha='center', va='center')
+            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)')
+        
+        # Make panels square without distorting data aspect
+        ax_mae.set_box_aspect(1)
+        ax_corr.set_box_aspect(1)
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.92])
+        return fig
+
+    def generate_figure_29b_phenotype_summary_continuous(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 29b: Continuous phenotype association summaries (MAE and effect correlation) with square panels"""
+        if not association_results:
+            print("  No continuous phenotype associations to summarize")
+            return None
+        
+        mae_results = self._calculate_association_mae_continuous(association_results)
+        corr_results = self._calculate_effect_correlation_continuous(association_results)
+        
+        # Method colors: Truth=black, Method1=red, Method2=blue, Method3=green, Method4=yellow/orange
+        method_colors = {
+            'Truth': 'black',
+            data.method1_name: NATURE_COLORS['primary'],
+            data.method2_name: NATURE_COLORS['secondary']
+        }
+        if data.method3_name:
+            method_colors[data.method3_name] = NATURE_COLORS['accent']
+        if data.method4_name:
+            method_colors[data.method4_name] = NATURE_COLORS['highlight']
+        
+        fig, (ax_mae, ax_corr) = plt.subplots(1, 2, figsize=(12, 6))
+        fig.suptitle('Continuous Phenotype Associations: MAE and Effect Correlation', fontsize=16, fontweight='bold')
+        
+        # MAE panel
+        if mae_results:
+            methods = list(mae_results.keys())
+            mae_values = [mae_results[m] for m in methods]
+            ax_mae.bar(range(len(methods)), mae_values,
+                       color=[method_colors.get(m, 'gray') for m in methods],
+                       alpha=0.7, edgecolor='black', linewidth=0.5)
+            for i, (method, value) in enumerate(zip(methods, mae_values)):
+                ax_mae.text(i, value + 0.01 * max(mae_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+            ax_mae.set_xlabel('Method')
+            ax_mae.set_ylabel('Mean Absolute Error')
+            ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)', fontweight='bold')
+            ax_mae.set_xticks(range(len(methods)))
+            ax_mae.set_xticklabels(methods, rotation=45, ha='right')
+            ax_mae.grid(True, alpha=0.3, axis='y')
+        else:
+            ax_mae.text(0.5, 0.5, 'No MAE data available', transform=ax_mae.transAxes, ha='center', va='center')
+            ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)')
+        
+        # Correlation panel
+        if corr_results:
+            methods_c = list(corr_results.keys())
+            corr_values = [corr_results[m] for m in methods_c]
+            ax_corr.bar(range(len(methods_c)), corr_values,
+                        color=[method_colors.get(m, 'gray') for m in methods_c],
+                        alpha=0.7, edgecolor='black', linewidth=0.5)
+            for i, (method, value) in enumerate(zip(methods_c, corr_values)):
+                ax_corr.text(i, value + 0.01 * max(corr_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+            ax_corr.set_xlabel('Method')
+            ax_corr.set_ylabel('Spearman r (beta)')
+            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)', fontweight='bold')
+            ax_corr.set_xticks(range(len(methods_c)))
+            ax_corr.set_xticklabels(methods_c, rotation=45, ha='right')
+            ax_corr.grid(True, alpha=0.3, axis='y')
+        else:
+            ax_corr.text(0.5, 0.5, 'No correlation data available', transform=ax_corr.transAxes, ha='center', va='center')
+            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)')
+        
+        # Make panels square without distorting data aspect
+        ax_mae.set_box_aspect(1)
+        ax_corr.set_box_aspect(1)
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.92])
+        return fig
+
     def generate_figure_28_phenotype_forest_plots_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
-        """Figure 28: Forest plots for binary phenotype associations with MAE panel"""
+        """Figure 28: Forest plots for binary phenotype associations (forest plots only)"""
         if not association_results:
             print("  No binary phenotype associations to plot")
             return None
         
         print("Generating Figure 28: Binary phenotype forest plots...")
         
-        # Calculate MAE for odds ratios
-        mae_results = self._calculate_association_mae_binary(association_results)
-        
-        # Determine subplot layout - add one more subplot for MAE
+        # Determine subplot layout - forest plots only
         n_phenotypes = len(association_results)
-        total_subplots = n_phenotypes + 1  # +1 for MAE panel
+        total_subplots = n_phenotypes
         n_cols = min(3, total_subplots)  # Max 3 columns for better readability
         n_rows = (total_subplots + n_cols - 1) // n_cols
         
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows))
+        # Double the height per row to accommodate top 20 features
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 15*n_rows))
         # Ensure axes is always a list
         if total_subplots == 1:
             axes = [axes]
@@ -1171,16 +1469,16 @@ class ComparativeAnalyzer:
         else:
             axes = axes.flatten()
         
-        fig.suptitle('Binary Phenotype Associations: Forest Plots & MAE Analysis', fontsize=16, fontweight='bold')
+        fig.suptitle('Binary Phenotype Associations: Forest Plots', fontsize=16, fontweight='bold')
         
-        # Method colors
+        # Method colors: Truth=black, Method1=red, Method2=blue, Method3=green, Method4=yellow/orange
         method_colors = {
-            'Truth': NATURE_COLORS['primary'],
-            data.method1_name: NATURE_COLORS['secondary'],
-            data.method2_name: NATURE_COLORS['accent']
+            'Truth': 'black',
+            data.method1_name: NATURE_COLORS['primary'],
+            data.method2_name: NATURE_COLORS['secondary']
         }
         if data.method3_name:
-            method_colors[data.method3_name] = NATURE_COLORS['neutral']
+            method_colors[data.method3_name] = NATURE_COLORS['accent']
         if data.method4_name:
             method_colors[data.method4_name] = NATURE_COLORS['highlight']
         
@@ -1196,11 +1494,11 @@ class ComparativeAnalyzer:
                                                         method='fdr_bh', alpha=0.05)
                 truth_results['p_adj'] = pvals_corrected
                 
-                # Select top 10 features by adjusted p-value
-                top_features = truth_results.nsmallest(10, 'p_adj')['feature'].tolist()
+                # Select top 20 features by adjusted p-value
+                top_features = truth_results.nsmallest(20, 'p_adj')['feature'].tolist()
             else:
                 # If no truth results, use results from first available method
-                top_features = results_df['feature'].unique()[:10]
+                top_features = results_df['feature'].unique()[:20]
             
             # Filter results to top features
             plot_data = results_df[results_df['feature'].isin(top_features)].copy()
@@ -1219,7 +1517,7 @@ class ComparativeAnalyzer:
                 feature_data = plot_data[plot_data['feature'] == feature]
                 if len(feature_data) > 0:
                     y_positions[feature] = current_y
-                    current_y += 2  # Increased spacing between features
+                    current_y += 2  # spacing per feature remains the same
             
             # Plot forest plot
             for method in ['Truth'] + [m for m in plot_data['method'].unique() if m != 'Truth']:
@@ -1237,11 +1535,16 @@ class ComparativeAnalyzer:
                                [y_pos + method_offset, y_pos + method_offset],
                                color=method_colors.get(method, 'gray'), linewidth=2, alpha=0.7)
                         
-                        # Plot point estimate
-                        marker = 'o' if row['p_value'] < 0.05 else '^'
-                        ax.scatter(row['odds_ratio'], y_pos + method_offset, 
-                                  color=method_colors.get(method, 'gray'), s=60,
-                                  marker=marker, edgecolors='black', linewidth=0.5)
+                        # Plot point estimate as circle: solid = significant, empty = non-significant
+                        is_sig = (row['p_value'] < 0.05) if pd.notna(row['p_value']) else False
+                        if is_sig:
+                            ax.scatter(row['odds_ratio'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors=method_colors.get(method, 'gray'),
+                                       edgecolors='black', linewidth=0.5)
+                        else:
+                            ax.scatter(row['odds_ratio'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors='none',
+                                       edgecolors=method_colors.get(method, 'gray'), linewidth=1.2)
             
             # Add vertical line at OR=1
             ax.axvline(x=1, color='gray', linestyle='--', alpha=0.5)
@@ -1251,9 +1554,15 @@ class ComparativeAnalyzer:
             ax.set_yticklabels([f[:20] + '...' if len(f) > 20 else f for f in y_positions.keys()], 
                               fontsize=10)
             ax.set_xlabel('Odds Ratio (95% CI)')
+            ax.set_ylabel('Feature')
             ax.set_title(phenotype, fontweight='bold')
-            ax.set_xscale('log')
+            # Linear scale for odds ratios
             ax.grid(True, alpha=0.3, axis='x')
+            # Use ScalarFormatter with plain style for tick labels
+            from matplotlib.ticker import ScalarFormatter
+            sfmt = ScalarFormatter(useMathText=False)
+            sfmt.set_scientific(False)
+            ax.xaxis.set_major_formatter(sfmt)
             
             # Set y-axis limits to accommodate the increased spacing
             if y_positions:
@@ -1266,69 +1575,32 @@ class ComparativeAnalyzer:
                     legend_elements.append(plt.Line2D([0], [0], color=color, lw=2, label=method))
             ax.legend(handles=legend_elements, loc='best', fontsize=10)
         
-        # Add MAE panel
-        mae_ax = axes[n_phenotypes]
-        if mae_results:
-            methods = list(mae_results.keys())
-            mae_values = [mae_results[method] for method in methods]
-            
-            # Create bar plot
-            bars = mae_ax.bar(range(len(methods)), mae_values, 
-                             color=[method_colors.get(method, 'gray') for method in methods],
-                             alpha=0.7, edgecolor='black', linewidth=0.5)
-            
-            # Add value labels on bars
-            for i, (method, value) in enumerate(zip(methods, mae_values)):
-                mae_ax.text(i, value + 0.01 * max(mae_values), f'{value:.3f}', 
-                           ha='center', va='bottom', fontsize=9)
-            
-            mae_ax.set_xlabel('Method')
-            mae_ax.set_ylabel('Mean Absolute Error')
-            mae_ax.set_title('MAE of Odds Ratios vs Truth', fontweight='bold')
-            mae_ax.set_xticks(range(len(methods)))
-            mae_ax.set_xticklabels(methods, rotation=45, ha='right')
-            mae_ax.grid(True, alpha=0.3, axis='y')
-            
-            # Add text annotation with details
-            # Count significant associations in Truth
-            n_significant = 0
-            for phenotype, results_df in association_results.items():
-                truth_results = results_df[results_df['method'] == 'Truth']
-                n_significant += len(truth_results[truth_results['p_value'] < 0.05])
-            
-            mae_ax.text(0.02, 0.98, f'n_significant = {n_significant}\n(Truth p < 0.05)', 
-                       transform=mae_ax.transAxes, fontsize=8, verticalalignment='top',
-                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-        else:
-            mae_ax.text(0.5, 0.5, 'No MAE data available\n(Truth method not found)', 
-                       ha='center', va='center', transform=mae_ax.transAxes, fontsize=12)
-            mae_ax.set_title('MAE of Odds Ratios vs Truth')
-        
-        # Hide unused subplots
+        # Hide unused subplots and ensure labels are not clipped
         for idx in range(total_subplots, len(axes)):
             axes[idx].axis('off')
+        for ax in axes[:total_subplots]:
+            for label in ax.get_xticklabels():
+                label.set_horizontalalignment('right')
         
         plt.tight_layout()
         return fig
     
     def generate_figure_29_phenotype_forest_plots_continuous(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
-        """Figure 29: Forest plots for continuous phenotype associations with MAE panel"""
+        """Figure 29: Forest plots for continuous phenotype associations (forest plots only)"""
         if not association_results:
             print("  No continuous phenotype associations to plot")
             return None
         
         print("Generating Figure 29: Continuous phenotype forest plots...")
         
-        # Calculate MAE for beta coefficients
-        mae_results = self._calculate_association_mae_continuous(association_results)
-        
         # Determine subplot layout - add one more subplot for MAE
         n_phenotypes = len(association_results)
-        total_subplots = n_phenotypes + 1  # +1 for MAE panel
+        total_subplots = n_phenotypes
         n_cols = min(3, total_subplots)  # Max 3 columns for better readability
         n_rows = (total_subplots + n_cols - 1) // n_cols
         
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows))
+        # Double the height per row to accommodate top 20 features
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 15*n_rows))
         # Ensure axes is always a list
         if total_subplots == 1:
             axes = [axes]
@@ -1337,16 +1609,16 @@ class ComparativeAnalyzer:
         else:
             axes = axes.flatten()
         
-        fig.suptitle('Continuous Phenotype Associations: Forest Plots & MAE Analysis', fontsize=16, fontweight='bold')
+        fig.suptitle('Continuous Phenotype Associations: Forest Plots', fontsize=16, fontweight='bold')
         
-        # Method colors
+        # Method colors: Truth=black, Method1=red, Method2=blue, Method3=green, Method4=yellow/orange
         method_colors = {
-            'Truth': NATURE_COLORS['primary'],
-            data.method1_name: NATURE_COLORS['secondary'],
-            data.method2_name: NATURE_COLORS['accent']
+            'Truth': 'black',
+            data.method1_name: NATURE_COLORS['primary'],
+            data.method2_name: NATURE_COLORS['secondary']
         }
         if data.method3_name:
-            method_colors[data.method3_name] = NATURE_COLORS['neutral']
+            method_colors[data.method3_name] = NATURE_COLORS['accent']
         if data.method4_name:
             method_colors[data.method4_name] = NATURE_COLORS['highlight']
         
@@ -1362,11 +1634,11 @@ class ComparativeAnalyzer:
                                                         method='fdr_bh', alpha=0.05)
                 truth_results['p_adj'] = pvals_corrected
                 
-                # Select top 10 features by adjusted p-value
-                top_features = truth_results.nsmallest(10, 'p_adj')['feature'].tolist()
+                # Select top 20 features by adjusted p-value
+                top_features = truth_results.nsmallest(20, 'p_adj')['feature'].tolist()
             else:
                 # If no truth results, use results from first available method
-                top_features = results_df['feature'].unique()[:10]
+                top_features = results_df['feature'].unique()[:20]
             
             # Filter results to top features
             plot_data = results_df[results_df['feature'].isin(top_features)].copy()
@@ -1385,7 +1657,7 @@ class ComparativeAnalyzer:
                 feature_data = plot_data[plot_data['feature'] == feature]
                 if len(feature_data) > 0:
                     y_positions[feature] = current_y
-                    current_y += 2  # Increased spacing between features
+                    current_y += 2  # spacing per feature remains the same
             
             # Plot forest plot
             for method in ['Truth'] + [m for m in plot_data['method'].unique() if m != 'Truth']:
@@ -1403,11 +1675,16 @@ class ComparativeAnalyzer:
                                [y_pos + method_offset, y_pos + method_offset],
                                color=method_colors.get(method, 'gray'), linewidth=2, alpha=0.7)
                         
-                        # Plot point estimate
-                        marker = 'o' if row['p_value'] < 0.05 else '^'
-                        ax.scatter(row['beta'], y_pos + method_offset, 
-                                  color=method_colors.get(method, 'gray'), s=60,
-                                  marker=marker, edgecolors='black', linewidth=0.5)
+                        # Plot point estimate as circle: solid = significant, empty = non-significant
+                        is_sig = (row['p_value'] < 0.05) if pd.notna(row['p_value']) else False
+                        if is_sig:
+                            ax.scatter(row['beta'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors=method_colors.get(method, 'gray'),
+                                       edgecolors='black', linewidth=0.5)
+                        else:
+                            ax.scatter(row['beta'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors='none',
+                                       edgecolors=method_colors.get(method, 'gray'), linewidth=1.2)
             
             # Add vertical line at beta=0
             ax.axvline(x=0, color='gray', linestyle='--', alpha=0.5)
@@ -1417,6 +1694,7 @@ class ComparativeAnalyzer:
             ax.set_yticklabels([f[:20] + '...' if len(f) > 20 else f for f in y_positions.keys()], 
                               fontsize=10)
             ax.set_xlabel('Beta Coefficient (95% CI)')
+            ax.set_ylabel('Feature')
             ax.set_title(phenotype, fontweight='bold')
             ax.grid(True, alpha=0.3, axis='x')
             
@@ -1443,69 +1721,12 @@ class ComparativeAnalyzer:
                    fontsize=8, verticalalignment='top',
                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         
-        # Add MAE panel
-        mae_ax = axes[n_phenotypes]
-        if mae_results:
-            methods = list(mae_results.keys())
-            mae_values = [mae_results[method] for method in methods]
-            
-            # Create bar plot
-            bars = mae_ax.bar(range(len(methods)), mae_values, 
-                             color=[method_colors.get(method, 'gray') for method in methods],
-                             alpha=0.7, edgecolor='black', linewidth=0.5)
-            
-            # Add value labels on bars
-            for i, (method, value) in enumerate(zip(methods, mae_values)):
-                mae_ax.text(i, value + 0.01 * max(mae_values), f'{value:.3f}', 
-                           ha='center', va='bottom', fontsize=9)
-            
-            mae_ax.set_xlabel('Method')
-            mae_ax.set_ylabel('Mean Absolute Error')
-            mae_ax.set_title('MAE of Beta Coefficients vs Truth', fontweight='bold')
-            mae_ax.set_xticks(range(len(methods)))
-            mae_ax.set_xticklabels(methods, rotation=45, ha='right')
-            mae_ax.grid(True, alpha=0.3, axis='y')
-            
-            # Add text annotation with details
-            # Count significant associations in Truth
-            n_significant = 0
-            for phenotype, results_df in association_results.items():
-                truth_results = results_df[results_df['method'] == 'Truth']
-                n_significant += len(truth_results[truth_results['p_value'] < 0.05])
-            
-            mae_ax.text(0.02, 0.98, f'n_significant = {n_significant}\n(Truth p < 0.05)', 
-                       transform=mae_ax.transAxes, fontsize=8, verticalalignment='top',
-                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-            
-            # Add mean R² for each method
-            r2_values = {}
-            for phenotype, results_df in association_results.items():
-                for method in results_df['method'].unique():
-                    if method != 'Truth':
-                        method_data = results_df[results_df['method'] == method]
-                        if len(method_data) > 0:
-                            if method not in r2_values:
-                                r2_values[method] = []
-                            r2_values[method].extend(method_data['r_squared'].values)
-            
-            r2_text = []
-            for method in methods:
-                if method in r2_values and r2_values[method]:
-                    mean_r2 = np.mean(r2_values[method])
-                    r2_text.append(f"{method}: R²={mean_r2:.3f}")
-            
-            if r2_text:
-                mae_ax.text(0.98, 0.98, '\n'.join(r2_text), transform=mae_ax.transAxes, 
-                           fontsize=8, verticalalignment='top', horizontalalignment='right',
-                           bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-        else:
-            mae_ax.text(0.5, 0.5, 'No MAE data available\n(Truth method not found)', 
-                       ha='center', va='center', transform=mae_ax.transAxes, fontsize=12)
-            mae_ax.set_title('MAE of Beta Coefficients vs Truth')
-        
         # Hide unused subplots
         for idx in range(total_subplots, len(axes)):
             axes[idx].axis('off')
+        for ax in axes[:total_subplots]:
+            for label in ax.get_xticklabels():
+                label.set_horizontalalignment('right')
         
         plt.tight_layout()
         return fig
@@ -1524,12 +1745,15 @@ class ComparativeAnalyzer:
             'Git_Hash': self.git_hash,
             'Timestamp': self.timestamp
         }
-        
+
+        # Extract PNG DPI if provided, avoid passing duplicate 'dpi'
+        png_dpi = kwargs.pop('dpi', 300)
+
         # Save PDF (vector format for publication)
         fig.savefig(fig_path, format='pdf', metadata=metadata, **kwargs)
         
         # Save PNG (for quick viewing)
-        fig.savefig(png_path, format='png', dpi=300, **kwargs)
+        fig.savefig(png_path, format='png', dpi=png_dpi, **kwargs)
         
         print(f"  Figure saved: {fig_path}")
     
@@ -2023,6 +2247,212 @@ class ComparativeAnalyzer:
         plt.tight_layout()
         return fig
     
+    def generate_figure_3b_vertical_violin_plots(self, data: AnalysisData):
+        """Figure 3b: Vertically stacked violin plots with Method 4 as horizontal baseline and statistical testing"""
+        print("Generating Figure 3b: Vertical violin plots with statistical testing...")
+        
+        from scipy.stats import mannwhitneyu
+        
+        feat_metrics = data.metrics['feature_wise']
+        sample_metrics = data.metrics['sample_wise']
+        
+        # Check if we have any metrics
+        if feat_metrics.empty and sample_metrics.empty:
+            print("    No metrics available - creating placeholder figure")
+            fig, ax = plt.subplots(figsize=(8, 8))
+            ax.text(0.5, 0.5, 'No metrics available', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Performance Distributions')
+            return fig
+        
+        # Create 1x2 layout for feature-wise and sample-wise
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 6))
+        fig.suptitle(f'{data.platform_a_name} - Vertical Distribution Analysis with Statistical Testing', 
+                     fontsize=16, fontweight='bold')
+        # Make subplots square
+        try:
+            ax1.set_box_aspect(1)
+            ax2.set_box_aspect(1)
+        except Exception:
+            pass
+        
+        # Get Platform A data
+        platform_data_feat = feat_metrics[feat_metrics['platform'] == 'Platform_A'] if not feat_metrics.empty else pd.DataFrame()
+        platform_data_samp = sample_metrics[sample_metrics['platform'] == 'Platform_A'] if not sample_metrics.empty else pd.DataFrame()
+        
+        colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], 
+                 NATURE_COLORS['accent'], NATURE_COLORS['alternative_1']]
+        
+        def create_vertical_violin_plot_with_stats(ax, platform_data, metric_name, plot_title):
+            """Create vertical violin plots with baseline and top significance bars"""
+            methods_data = []
+            labels = []
+            method_keys = []
+            baseline_data = None
+            baseline_name = None
+            
+            if len(platform_data) > 0:
+                # Collect all available methods
+                method_mapping = {
+                    'Method_1': data.method1_name,
+                    'Method_2': data.method2_name,
+                    'Method_3': data.method3_name,
+                    'Method_4': data.method4_name
+                }
+                
+                for method_key, method_name in method_mapping.items():
+                    if method_name is not None:
+                        method_subset = platform_data[platform_data['method'] == method_key]
+                        if len(method_subset) > 0:
+                            method_data = method_subset['r'].values
+                            
+                            # Check if this is Method 4 (baseline)
+                            if method_key == 'Method_4':
+                                baseline_data = method_data
+                                baseline_name = method_name
+                            else:
+                                methods_data.append(method_data)
+                                labels.append(method_name)
+                                method_keys.append(method_key)
+                
+                if len(methods_data) > 0:
+                    # Create vertical violin plot
+                    n_methods = len(methods_data)
+                    positions = list(range(1, n_methods + 1))
+
+                    # Preserve method order: Method 1, Method 2, Method 3
+                    methods_data_plot = methods_data
+                    labels_plot = labels
+
+                    violin_parts = ax.violinplot(
+                        methods_data_plot,
+                        positions=positions,
+                        widths=0.6,
+                        vert=True,
+                        showmeans=True,
+                        showmedians=True,
+                        showextrema=True,
+                    )
+
+                    for i, pc in enumerate(violin_parts['bodies']):
+                        pc.set_facecolor(colors[i % len(colors)])
+                        pc.set_alpha(0.7)
+                        pc.set_edgecolor('black')
+                        pc.set_linewidth(0.8)
+
+                    if 'cmeans' in violin_parts:
+                        violin_parts['cmeans'].set_color('red')
+                        violin_parts['cmeans'].set_linewidth(2)
+                    if 'cmedians' in violin_parts:
+                        violin_parts['cmedians'].set_color('blue')
+                        violin_parts['cmedians'].set_linewidth(2)
+                    if 'cbars' in violin_parts:
+                        violin_parts['cbars'].set_color('black')
+                        violin_parts['cbars'].set_linewidth(1.5)
+                    if 'cmins' in violin_parts:
+                        violin_parts['cmins'].set_color('black')
+                        violin_parts['cmins'].set_linewidth(1.5)
+                    if 'cmaxes' in violin_parts:
+                        violin_parts['cmaxes'].set_color('black')
+                        violin_parts['cmaxes'].set_linewidth(1.5)
+
+                    baseline_mean = None
+                    if baseline_data is not None:
+                        baseline_mean = np.mean(baseline_data)
+                        ax.axhline(
+                            baseline_mean,
+                            color=colors[3],
+                            linestyle='--',
+                            linewidth=3,
+                            alpha=0.9,
+                            label=f'{baseline_name} (baseline): {baseline_mean:.3f}',
+                            zorder=10,
+                        )
+
+                    # Pairwise tests with top significance bars
+                    data_vals = [float(v) for d in methods_data for v in np.atleast_1d(d)]
+                    data_min = (min(data_vals) if len(data_vals) > 0 else 0.0)
+                    if baseline_mean is not None:
+                        data_min = min(data_min, float(baseline_mean))
+                    if len(methods_data) > 1:
+                        data_max = max([float(np.max(d)) for d in methods_data])
+                        if baseline_mean is not None:
+                            data_max = max(data_max, float(baseline_mean))
+                        top_base = max(1.0, data_max)
+                        y_start = top_base + 0.03
+                        y_step = 0.04
+                        comparison_idx = 0
+
+                        for i in range(len(methods_data_plot)):
+                            for j in range(i + 1, len(methods_data_plot)):
+                                try:
+                                    _, p_value = mannwhitneyu(methods_data_plot[i], methods_data_plot[j], alternative='two-sided')
+                                    if p_value < 0.001:
+                                        sig_text = '***'
+                                    elif p_value < 0.01:
+                                        sig_text = '**'
+                                    elif p_value < 0.05:
+                                        sig_text = '*'
+                                    else:
+                                        sig_text = 'ns'
+
+                                    y = y_start + y_step * comparison_idx
+                                    x1, x2 = positions[i], positions[j]
+                                    ax.plot([x1, x1, x2, x2], [y - 0.005, y, y, y - 0.005], 'k-', linewidth=1)
+                                    ax.text((x1 + x2) / 2.0, y + 0.01, sig_text, ha='center', va='bottom', fontsize=8)
+                                    comparison_idx += 1
+                                except Exception as e:
+                                    print(f"    Warning: Statistical test failed for {labels_plot[i]} vs {labels_plot[j]}: {e}")
+
+                        lower_bound = min(0.0, data_min - 0.05)
+                        ax.set_ylim(lower_bound, y_start + y_step * (comparison_idx + 1))
+                    else:
+                        top_base = max(1.0, (baseline_mean + 0.1) if baseline_mean is not None else 1.0)
+                        lower_bound = min(0.0, data_min - 0.05)
+                        ax.set_ylim(lower_bound, top_base)
+
+                    ax.set_xticks(positions)
+                    ax.set_xticklabels(labels_plot, rotation=45, ha='right')
+                    ax.set_ylabel(f'{metric_name} Correlation (r)', fontweight='bold')
+                    ax.set_title(plot_title, fontweight='bold')
+                    ax.set_xlim(0.5, n_methods + 0.5)
+                    ax.grid(False)
+
+                    if baseline_data is not None:
+                        ax.legend(loc='upper left', fontsize=9)
+
+                    return True
+                else:
+                    ax.text(0.5, 0.5, f'No data for {data.platform_a_name}', 
+                           ha='center', va='center', transform=ax.transAxes)
+            else:
+                ax.text(0.5, 0.5, f'No data for {data.platform_a_name}', 
+                       ha='center', va='center', transform=ax.transAxes)
+            
+            ax.set_xlabel(f'{metric_name} Correlation (r)', fontweight='bold')
+            ax.set_title(plot_title, fontweight='bold')
+            ax.grid(False)
+            return False
+        
+        # Create vertical violin plots for both feature-wise and sample-wise
+        create_vertical_violin_plot_with_stats(ax1, platform_data_feat, 'Feature-wise', 
+                                              'Feature-wise Performance (Vertical)')
+        create_vertical_violin_plot_with_stats(ax2, platform_data_samp, 'Sample-wise', 
+                                              'Sample-wise Performance (Vertical)')
+        
+        # Add overall legend
+        legend_elements = [
+            plt.Line2D([0], [0], color='red', lw=2, label='Mean'),
+            plt.Line2D([0], [0], color='blue', lw=2, label='Median'),
+            plt.Line2D([0], [0], color='gray', lw=1.5, label='Min/Max'),
+            plt.Line2D([0], [0], color='black', lw=1, linestyle='--', label='Baseline Method'),
+            plt.Line2D([0], [0], color='black', lw=1, label='Statistical Comparisons')
+        ]
+        ax1.legend(handles=legend_elements, loc='upper right', fontsize=8)
+        
+        plt.tight_layout()
+        return fig
+    
     def generate_figure_4_bland_altman(self, data: AnalysisData):
         """Figure 4: Bland-Altman plots for bias assessment - separate subplot for each method"""
         print("Generating Figure 4: Bland-Altman plots...")
@@ -2032,6 +2462,13 @@ class ComparativeAnalyzer:
         platform_a_methods = [(method_key, method_name, truth, imputed) 
                               for method_key, method_name, platform, truth, imputed in available_methods 
                               if platform == 'Platform_A']
+        
+        # Exclude Method 4 (permuted baseline) from bias comparison
+        platform_a_methods = [
+            (method_key, method_name, truth, imputed)
+            for (method_key, method_name, truth, imputed) in platform_a_methods
+            if method_key != 'Method_4'
+        ]
         
         n_methods = len(platform_a_methods)
         
@@ -2231,6 +2668,151 @@ class ComparativeAnalyzer:
         plt.tight_layout()
         return fig
     
+    def generate_figure_4c_bland_altman_density(self, data: AnalysisData):
+        """Figure 4c: Bland-Altman density plots (high-resolution) for Platform A"""
+        print("Generating Figure 4c: Bland-Altman density plots (single platform)...")
+
+        available_methods = self._get_available_methods(data)
+        platform_a_methods = [(method_key, method_name, truth, imputed)
+                              for method_key, method_name, platform, truth, imputed in available_methods
+                              if platform == 'Platform_A']
+
+        n_methods = len(platform_a_methods)
+        if n_methods == 0:
+            print("No methods available for Bland-Altman density analysis")
+            return plt.figure()
+
+        fig, axes = plt.subplots(1, n_methods, figsize=(5*n_methods, 5))
+        if n_methods == 1:
+            axes = [axes]
+
+        for ax in axes:
+            ax.set_aspect('equal', adjustable='box')
+
+        fig.suptitle(f'Bland-Altman Analysis (Density): {data.platform_a_name}', fontsize=16, fontweight='bold')
+
+        def get_limits(methods):
+            all_truth_vals, all_diff_vals = [], []
+            for method_key, method_name, truth, imputed in methods:
+                truth_flat = truth.values.flatten()
+                imp_flat = imputed.values.flatten()
+                mask = ~(np.isnan(truth_flat) | np.isnan(imp_flat))
+                truth_clean = truth_flat[mask]
+                imp_clean = imp_flat[mask]
+                diff_clean = imp_clean - truth_clean
+                if truth_clean.size:
+                    all_truth_vals.extend(truth_clean)
+                    all_diff_vals.extend(diff_clean)
+            if all_truth_vals:
+                tmin, tmax = np.min(all_truth_vals), np.max(all_truth_vals)
+                dmin, dmax = np.min(all_diff_vals), np.max(all_diff_vals)
+                tr = tmax - tmin
+                dr = dmax - dmin
+                return (tmin - 0.05*tr, tmax + 0.05*tr), (dmin - 0.05*dr, dmax + 0.05*dr)
+            return (0, 1), (-1, 1)
+
+        truth_limits, diff_limits = get_limits(platform_a_methods)
+
+        def plot_density(ax, x_vals, y_vals, xlim, ylim):
+            import matplotlib.colors as mcolors
+            bins = (400, 400)
+            x = np.clip(x_vals, xlim[0], xlim[1])
+            y = np.clip(y_vals, ylim[0], ylim[1])
+            H, xedges, yedges = np.histogram2d(x, y, bins=bins, range=[xlim, ylim])
+            H = H.T
+            H_masked = np.ma.masked_where(H == 0, H)
+            base = plt.cm.get_cmap('magma', 256)
+            cmap = mcolors.ListedColormap(base(np.linspace(0, 1, 256)))
+            cmap.set_bad('white')
+            vmin = H_masked.min() if H_masked.count() > 0 else 1e-6
+            vmax = H_masked.max() if H_masked.count() > 0 else 1.0
+            norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
+            extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+            ax.set_facecolor('white')
+            im = ax.imshow(H_masked, extent=extent, origin='lower', aspect='auto',
+                           cmap=cmap, norm=norm)
+            return im
+
+        for i, (method_key, method_name, truth, imputed) in enumerate(platform_a_methods):
+            ax = axes[i]
+            truth_flat = truth.values.flatten()
+            imp_flat = imputed.values.flatten()
+            mask = ~(np.isnan(truth_flat) | np.isnan(imp_flat))
+            truth_clean = truth_flat[mask]
+            imp_clean = imp_flat[mask]
+            diff_vals = imp_clean - truth_clean
+
+            plot_density(ax, truth_clean, diff_vals, truth_limits, diff_limits)
+
+            mean_diff = float(np.mean(diff_vals)) if diff_vals.size else 0.0
+            std_diff = float(np.std(diff_vals)) if diff_vals.size else 0.0
+            ax.axhline(mean_diff, color='black', linestyle='-', linewidth=1.5, alpha=0.9)
+            ax.axhline(mean_diff + 1.96*std_diff, color='black', linestyle='--', linewidth=1, alpha=0.8)
+            ax.axhline(mean_diff - 1.96*std_diff, color='black', linestyle='--', linewidth=1, alpha=0.8)
+            ax.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.6)
+
+            ax.set_xlim(truth_limits)
+            ax.set_ylim(diff_limits)
+            ax.set_title(f'{method_name}', fontweight='bold', fontsize=12)
+            ax.set_xlabel('Truth Value')
+            ax.set_ylabel('Imputed - Truth')
+            ax.grid(False)
+            ax.text(0.02, 0.95, f'n={len(truth_clean):,}\nBias={mean_diff:.3f}',
+                    transform=ax.transAxes, fontsize=9, va='top',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.75))
+
+        plt.tight_layout()
+        return fig
+
+    def generate_figure_4d_variance_vs_mean(self, data: AnalysisData):
+        """Figure 4d: Variance vs Mean plots (feature-wise and sample-wise) for Platform A"""
+        print("Generating Figure 4d: Variance vs Mean plots (single platform)...")
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        fig.suptitle(f'Variance vs Mean: {data.platform_a_name}', fontsize=16, fontweight='bold')
+
+        method_colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'],
+                         NATURE_COLORS['accent'], NATURE_COLORS['alternative_1']]
+        truth_color = 'black'
+
+        def plot_mv(ax, matrices, labels, title):
+            eps = 1e-8
+            for idx, (mat, label) in enumerate(zip(matrices, labels)):
+                if mat is None:
+                    continue
+                means = np.nanmean(mat, axis=1)
+                vars_ = np.nanvar(mat, axis=1)
+                color = truth_color if label == 'Truth' else method_colors[(idx-1) % len(method_colors)] if idx > 0 else method_colors[0]
+                ax.scatter(np.log10(means + eps), np.log10(vars_ + eps), s=6, alpha=0.35, c=color, edgecolors='none', rasterized=True, label=label)
+            ax.set_xlabel('log10(Mean)')
+            ax.set_ylabel('log10(Variance)')
+            ax.set_title(title, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=9)
+
+        # Collect Platform A matrices
+        platform_a_methods = []
+        if data.imp_a_m1 is not None:
+            platform_a_methods.append((data.imp_a_m1, data.method1_name))
+        if data.imp_a_m2 is not None:
+            platform_a_methods.append((data.imp_a_m2, data.method2_name))
+        if getattr(data, 'imp_a_m3', None) is not None and getattr(data, 'method3_name', None) is not None:
+            platform_a_methods.append((data.imp_a_m3, data.method3_name))
+        if getattr(data, 'imp_a_m4', None) is not None and getattr(data, 'method4_name', None) is not None:
+            platform_a_methods.append((data.imp_a_m4, data.method4_name))
+
+        # Feature-wise (rows = features)
+        a_feat_matrices = [data.truth_a.values] + [m.values for m, _ in platform_a_methods]
+        a_feat_labels = ['Truth'] + [name for _, name in platform_a_methods]
+        plot_mv(axes[0], a_feat_matrices, a_feat_labels, 'Feature-wise')
+
+        # Sample-wise (rows = samples)
+        a_samp_matrices = [data.truth_a.values.T] + [m.values.T for m, _ in platform_a_methods]
+        a_samp_labels = ['Truth'] + [name for _, name in platform_a_methods]
+        plot_mv(axes[1], a_samp_matrices, a_samp_labels, 'Sample-wise')
+
+        plt.tight_layout()
+        return fig
     def generate_figure_5_error_ecdfs(self, data: AnalysisData):
         """Figure 5: Absolute-error empirical CDFs"""
         print("Generating Figure 5: Error ECDFs...")
@@ -2688,7 +3270,7 @@ class ComparativeAnalyzer:
             platforms = []
             data_types = []
             
-            # Platform A datasets only
+            # Platform A datasets only (exclude Method 4 as it's a permuted baseline)
             platform_a_datasets = {
                 'Truth_A': data.truth_a,
                 f'{data.method1_name}_A': data.imp_a_m1,
@@ -2696,8 +3278,7 @@ class ComparativeAnalyzer:
             }
             if data.imp_a_m3 is not None and data.method3_name is not None:
                 platform_a_datasets[f'{data.method3_name}_A'] = data.imp_a_m3
-            if data.imp_a_m4 is not None and data.method4_name is not None:
-                platform_a_datasets[f'{data.method4_name}_A'] = data.imp_a_m4
+            # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
             
             # Process Platform A only
             for platform_name, datasets_dict in [('Platform_A', platform_a_datasets)]:
@@ -2878,11 +3459,11 @@ class ComparativeAnalyzer:
         print("Generating Figure 9b: Feature-level structure analysis (PCA/UMAP)...")
         
         try:
-            # Get available methods for Platform A
+            # Get available methods for Platform A (exclude Method 4 - it's a permuted baseline)
             available_methods = self._get_available_methods(data)
             platform_a_methods = [(method_key, method_name, truth, imputed) 
                                   for method_key, method_name, platform, truth, imputed in available_methods 
-                                  if platform == 'Platform_A']
+                                  if platform == 'Platform_A' and method_key != 'Method_4']
             
             n_methods = len(platform_a_methods)
             
@@ -3046,11 +3627,11 @@ class ComparativeAnalyzer:
         print("Generating Figure 9c: Feature-level structure analysis with K-Means clustering...")
         
         try:
-            # Get available methods for Platform A
+            # Get available methods for Platform A (exclude Method 4 - it's a permuted baseline)
             available_methods = self._get_available_methods(data)
             platform_a_methods = [(method_key, method_name, truth, imputed) 
                                   for method_key, method_name, platform, truth, imputed in available_methods 
-                                  if platform == 'Platform_A']
+                                  if platform == 'Platform_A' and method_key != 'Method_4']
             
             n_methods = len(platform_a_methods)
             
@@ -4489,8 +5070,11 @@ class ComparativeAnalyzer:
             ("figure_1_feature_r_scatter", self.generate_figure_1_feature_r_scatter),
             ("figure_2_sample_r_scatter", self.generate_figure_2_sample_r_scatter),
             ("figure_3_r_distribution_ridge", self.generate_figure_3_r_distribution_ridge),
+            ("figure_3b_vertical_violin_plots", self.generate_figure_3b_vertical_violin_plots),
             ("figure_4_bland_altman", self.generate_figure_4_bland_altman),
             ("figure_4b_bias_comparison", self.generate_figure_4b_bias_comparison),
+            ("figure_4c_bland_altman_density", self.generate_figure_4c_bland_altman_density),
+            ("figure_4d_variance_vs_mean", self.generate_figure_4d_variance_vs_mean),
             ("figure_5_error_ecdfs", self.generate_figure_5_error_ecdfs),
             ("figure_6_sample_error_heatmap", self.generate_figure_6_sample_error_heatmap),
             ("figure_7_hexbin_error_abundance", self.generate_figure_7_hexbin_error_abundance),
@@ -4530,7 +5114,10 @@ class ComparativeAnalyzer:
         for fig_name, fig_func in figure_functions:
             try:
                 fig = fig_func(data)
-                self.save_figure(fig, fig_name)
+                if fig_name == "figure_4c_bland_altman_density":
+                    self.save_figure(fig, fig_name, dpi=600)
+                else:
+                    self.save_figure(fig, fig_name)
                 plt.close(fig)
                 generated_figures.append(fig_name)
             except Exception as e:
@@ -4699,6 +5286,11 @@ class ComparativeAnalyzer:
                     self.save_figure(fig28, "figure_28_phenotype_forest_plots_binary")
                     plt.close(fig28)
                     phenotype_figures.append("figure_28_phenotype_forest_plots_binary")
+                fig28b = self.generate_figure_28b_phenotype_summary_binary(data, binary_results)
+                if fig28b is not None:
+                    self.save_figure(fig28b, "figure_28b_phenotype_summary_binary")
+                    plt.close(fig28b)
+                    phenotype_figures.append("figure_28b_phenotype_summary_binary")
             except Exception as e:
                 print(f"    Error generating figure 28: {str(e)}")
         
@@ -4709,6 +5301,11 @@ class ComparativeAnalyzer:
                     self.save_figure(fig29, "figure_29_phenotype_forest_plots_continuous")
                     plt.close(fig29)
                     phenotype_figures.append("figure_29_phenotype_forest_plots_continuous")
+                fig29b = self.generate_figure_29b_phenotype_summary_continuous(data, continuous_results)
+                if fig29b is not None:
+                    self.save_figure(fig29b, "figure_29b_phenotype_summary_continuous")
+                    plt.close(fig29b)
+                    phenotype_figures.append("figure_29b_phenotype_summary_continuous")
             except Exception as e:
                 print(f"    Error generating figure 29: {str(e)}")
         
@@ -6127,6 +6724,8 @@ Phenotype file format:
     parser.add_argument('--phenotype_file', help='Phenotype file (CSV or TXT) with sample IDs as index')
     parser.add_argument('--binary_pheno', nargs='+', help='Column names for binary phenotypes')
     parser.add_argument('--continuous_pheno', nargs='+', help='Column names for continuous phenotypes')
+    parser.add_argument('--gender_col', help='Optional gender column name for covariate adjustment')
+    parser.add_argument('--age_col', help='Optional age column name for covariate adjustment')
     
     args = parser.parse_args()
     
@@ -6144,7 +6743,7 @@ Phenotype file format:
         file_paths['imp_a_m4'] = args.imp_a_m4
     
     # Initialize analyzer
-    analyzer = ComparativeAnalyzer(args.output_dir)
+    analyzer = ComparativeAnalyzer(args.output_dir, gender_col=args.gender_col, age_col=args.age_col)
     
     print("="*80)
     print("Single-Platform Proteomics Imputation Analysis")

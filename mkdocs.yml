@@ -91,3 +91,5 @@ nav:
       - Comparison: comparison.md
       - Feature Importance: feature_importance.md
       - Latent Space: latent_space.md
+      - Confidence & Analysis: confidence.md
+      - Phenotype Association: phenotype_association.md

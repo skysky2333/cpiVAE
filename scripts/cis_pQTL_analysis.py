@@ -884,8 +884,8 @@ class CispQTLAnalyzer:
         """
         print("Generating Figure 1: Overlap analysis dashboard...")
         
-        fig = plt.figure(figsize=(20, 16))
-        gs = GridSpec(4, 4, figure=fig, hspace=0.3, wspace=0.3)
+        fig = plt.figure(figsize=(8, 16))
+        gs = GridSpec(4, 2, figure=fig, hspace=0.3, wspace=0.3)
         
         fig.suptitle('cis-pQTL Analysis: Method vs Truth Overlap Dashboard', 
                     fontsize=20, fontweight='bold')
@@ -899,44 +899,44 @@ class CispQTLAnalyzer:
         
         # Row 1: Traditional overlap bar plots
         # Panel A: Phenotype-level overlap
-        ax1 = fig.add_subplot(gs[0, :2])
+        ax1 = fig.add_subplot(gs[0, 0])
         self._create_overlap_barplot(ax1, overlap_stats['phenotype'], method_names, method_colors,
                                    'Phenotype-level Overlap', 'Number of Proteins')
         
         # Panel B: Variant-level overlap  
-        ax2 = fig.add_subplot(gs[0, 2:])
+        ax2 = fig.add_subplot(gs[0, 1])
         self._create_overlap_barplot(ax2, overlap_stats['variant'], method_names, method_colors,
                                    'Variant-level Overlap', 'Number of SNPs')
         
         # Row 2: Bidirectional overlap percentages for Phenotypes
         # Panel C: Phenotype overlap from method perspective
-        ax3 = fig.add_subplot(gs[1, :2])
+        ax3 = fig.add_subplot(gs[1, 0])
         self._create_bidirectional_overlap_plot(ax3, overlap_stats['phenotype'], method_names, method_colors,
                                                'Phenotype Overlap: Method Perspective', 'method')
         
         # Panel D: Phenotype overlap from truth perspective
-        ax4 = fig.add_subplot(gs[1, 2:])
+        ax4 = fig.add_subplot(gs[1, 1])
         self._create_bidirectional_overlap_plot(ax4, overlap_stats['phenotype'], method_names, method_colors,
                                                'Phenotype Overlap: Truth Perspective', 'truth')
         
         # Row 3: Bidirectional overlap percentages for Variants
         # Panel E: Variant overlap from method perspective
-        ax5 = fig.add_subplot(gs[2, :2])
+        ax5 = fig.add_subplot(gs[2, 0])
         self._create_bidirectional_overlap_plot(ax5, overlap_stats['variant'], method_names, method_colors,
                                                'Variant Overlap: Method Perspective', 'method')
         
         # Panel F: Variant overlap from truth perspective
-        ax6 = fig.add_subplot(gs[2, 2:])
+        ax6 = fig.add_subplot(gs[2, 1])
         self._create_bidirectional_overlap_plot(ax6, overlap_stats['variant'], method_names, method_colors,
                                                'Variant Overlap: Truth Perspective', 'truth')
         
         # Row 4: Summary analyses
         # Panel G: Performance metrics heatmap
-        ax7 = fig.add_subplot(gs[3, :2])
+        ax7 = fig.add_subplot(gs[3, 0])
         self._create_performance_heatmap(ax7, overlap_stats, method_names)
         
         # Panel H: Method ranking
-        ax8 = fig.add_subplot(gs[3, 2:])
+        ax8 = fig.add_subplot(gs[3, 1])
         if data.performance_metrics:
             self._create_method_ranking_plot(ax8, data.performance_metrics, method_colors)
         else:
