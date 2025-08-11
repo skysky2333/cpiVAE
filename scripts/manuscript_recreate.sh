@@ -74,6 +74,13 @@ python scripts/feature_importance_analysis.py \
     --ppi_reference data/9606.protein.links.v12.0_converted.tsv \
     --threshold_params 0.005477
 
+python scripts/feature_importance_analysis_correlation.py \
+    --truth_a data/olink_overlap_test.csv \
+    --platform_a_name "Olink" \
+    --platform_b_name "SomaScan" \
+    --ppi_reference data/9606.protein.links.v12.0_converted.tsv \
+    --output_dir output_comparisions_network_correlation
+
 # TARGET DENSITY RECOMMENDATION (density 0.0366):
 #     Best threshold: --threshold_params 0.005477
 #     Achieved density: 0.0351 (diff: 0.0015)
