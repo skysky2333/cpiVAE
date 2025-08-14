@@ -942,10 +942,10 @@ class LatentSpaceAnalyzer:
 
         # Left: overall sample spread in PCA
         ax_left.scatter(embedding_a[:, 0], embedding_a[:, 1],
-                        c=NATURE_COLORS['primary'], alpha=0.6, s=10,
+                        c=NATURE_COLORS['primary'], alpha=0.6, s=2,
                         label=data.platform_a_name, edgecolors='black', linewidth=0.1)
         ax_left.scatter(embedding_b[:, 0], embedding_b[:, 1],
-                        c=NATURE_COLORS['secondary'], alpha=0.6, s=10,
+                        c=NATURE_COLORS['secondary'], alpha=0.6, s=2,
                         label=data.platform_b_name, edgecolors='black', linewidth=0.1)
         ax_left.set_xlim(xlim)
         ax_left.set_ylim(ylim)
@@ -954,6 +954,7 @@ class LatentSpaceAnalyzer:
         ax_left.set_title('Overall Sample Spread (Fig1 PCA)')
         ax_left.legend(loc='upper right')
         ax_left.grid(True, alpha=0.3)
+        ax_left.set_aspect('equal', adjustable='box')
 
         # Right: per-sample deltas in the same PCA axes, anchored at origin
         if data.groups is not None:
@@ -969,12 +970,12 @@ class LatentSpaceAnalyzer:
                 mask = (data.groups == group).values
                 color = palette_colors[i % len(palette_colors)]
                 ax_right.scatter(delta_pc[mask, 0], delta_pc[mask, 1],
-                                 c=color, alpha=0.7, s=12, label=str(group),
+                                 c=color, alpha=0.3, s=2, label=str(group),
                                  edgecolors='black', linewidth=0.1)
             ax_right.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         else:
             ax_right.scatter(delta_pc[:, 0], delta_pc[:, 1],
-                             c=NATURE_COLORS['neutral'], alpha=0.7, s=12,
+                             c=NATURE_COLORS['neutral'], alpha=0.3, s=2,
                              edgecolors='black', linewidth=0.1)
 
         ax_right.set_xlim(xlim)
@@ -983,6 +984,7 @@ class LatentSpaceAnalyzer:
         ax_right.set_ylabel(f'PC2 ({var_ratio[1]:.1%} variance)')
         ax_right.set_title('Per-sample Δ (B − A) in Fig1 PCA axes')
         ax_right.grid(True, alpha=0.3)
+        ax_right.set_aspect('equal', adjustable='box')
 
         # Summary statistics annotation
         sample_radii = np.sqrt(np.sum(embedding**2, axis=1))

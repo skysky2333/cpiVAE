@@ -5285,14 +5285,19 @@ class ComparativeAnalyzer:
                 if len(common_idx) > 0:
                     a_vals = series_a.loc[common_idx]
                     b_vals = series_b.loc[common_idx]
+                    # Clip negative values to 0
+                    a_vals = a_vals.clip(lower=0)
+                    b_vals = b_vals.clip(lower=0)
                     try:
                         hb = ax_feat.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7)
                         hb_feature[i] = hb
                     except Exception:
                         ax_feat.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color)
-                    min_val = float(min(a_vals.min(), b_vals.min()))
-                    max_val = float(max(a_vals.max(), b_vals.max()))
-                    ax_feat.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8, linewidth=2)
+                    # Set axes limits to 0-1
+                    ax_feat.set_xlim(0, 1)
+                    ax_feat.set_ylim(0, 1)
+                    # Plot diagonal line within 0-1 range
+                    ax_feat.plot([0, 1], [0, 1], 'r--', alpha=0.8, linewidth=2)
                     try:
                         corr, _ = pearsonr(a_vals, b_vals)
                     except Exception:
@@ -5317,6 +5322,9 @@ class ComparativeAnalyzer:
                 if len(common_idx) > 0:
                     a_vals = series_a.loc[common_idx]
                     b_vals = series_b.loc[common_idx]
+                    # Clip negative values to 0
+                    a_vals = a_vals.clip(lower=0)
+                    b_vals = b_vals.clip(lower=0)
                     rank_a = a_vals.rank()
                     rank_b = b_vals.rank()
                     rank_diff = np.abs(rank_a - rank_b)
@@ -5352,14 +5360,19 @@ class ComparativeAnalyzer:
                 if len(common_idx) > 0:
                     a_vals = s_a.loc[common_idx]
                     b_vals = s_b.loc[common_idx]
+                    # Clip negative values to 0
+                    a_vals = a_vals.clip(lower=0)
+                    b_vals = b_vals.clip(lower=0)
                     try:
                         hb = ax_samp.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7)
                         hb_sample[i] = hb
                     except Exception:
                         ax_samp.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color)
-                    min_val = float(min(a_vals.min(), b_vals.min()))
-                    max_val = float(max(a_vals.max(), b_vals.max()))
-                    ax_samp.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8, linewidth=2)
+                    # Set axes limits to 0-1
+                    ax_samp.set_xlim(0, 1)
+                    ax_samp.set_ylim(0, 1)
+                    # Plot diagonal line within 0-1 range
+                    ax_samp.plot([0, 1], [0, 1], 'r--', alpha=0.8, linewidth=2)
                     try:
                         corr, _ = pearsonr(a_vals, b_vals)
                     except Exception:
@@ -5384,6 +5397,9 @@ class ComparativeAnalyzer:
                 if len(common_idx) > 0:
                     a_vals = s_a.loc[common_idx]
                     b_vals = s_b.loc[common_idx]
+                    # Clip negative values to 0
+                    a_vals = a_vals.clip(lower=0)
+                    b_vals = b_vals.clip(lower=0)
                     rank_a = a_vals.rank()
                     rank_b = b_vals.rank()
                     rank_diff = np.abs(rank_a - rank_b)

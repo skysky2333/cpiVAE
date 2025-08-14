@@ -51,8 +51,8 @@ python scripts/latent_space_analysis.py \
     --latent_b data/somascan_overlap_test_latent_vae.csv \
     --truth_a data/olink_overlap_test.csv \
     --truth_b data/somascan_overlap_test.csv \
-    --platform_a_name "Olink" \
-    --platform_b_name "Somascan" \
+    --platform_a_name "S->O" \
+    --platform_b_name "O->S" \
     --output_dir output_comparisions_latent
 
 # feature importance analysis

@@ -1444,6 +1444,252 @@ class ComparativeAnalyzer:
         
         plt.tight_layout(rect=[0, 0, 1, 0.92])
         return fig
+    
+    def generate_figure_28c_significance_contingency_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 28c: Contingency matrix of significant hits (FDR<0.05) for binary phenotypes"""
+        if not association_results:
+            print("  No binary phenotype associations for contingency matrix")
+            return None
+        
+        print("Generating Figure 28c: Binary phenotype significance contingency matrix...")
+        
+        # Get all available methods
+        all_methods = ['Truth']
+        if data.method1_name:
+            all_methods.append(data.method1_name)
+        if data.method2_name:
+            all_methods.append(data.method2_name)
+        if data.method3_name:
+            all_methods.append(data.method3_name)
+        if data.method4_name:
+            all_methods.append(data.method4_name)
+        
+        # Initialize contingency matrix for each phenotype
+        contingency_matrices = {}
+        
+        for phenotype, results_df in association_results.items():
+            # Create a matrix to store counts of overlapping significant hits
+            n_methods = len(all_methods)
+            contingency = np.zeros((n_methods, n_methods))
+            
+            # Get significant features for each method after FDR correction
+            sig_features_by_method = {}
+            
+            for method in all_methods:
+                method_results = results_df[results_df['method'] == method].copy()
+                if len(method_results) > 0:
+                    # Apply FDR correction
+                    _, pvals_corrected, _, _ = multipletests(
+                        method_results['p_value'].fillna(1), 
+                        method='fdr_bh', 
+                        alpha=0.05
+                    )
+                    method_results['p_adj'] = pvals_corrected
+                    
+                    # Get significant features
+                    sig_features = set(method_results[method_results['p_adj'] < 0.05]['feature'].tolist())
+                    sig_features_by_method[method] = sig_features
+                else:
+                    sig_features_by_method[method] = set()
+            
+            # Fill contingency matrix with overlap counts
+            for i, method1 in enumerate(all_methods):
+                for j, method2 in enumerate(all_methods):
+                    if method1 in sig_features_by_method and method2 in sig_features_by_method:
+                        if i == j:
+                            # Diagonal: total significant hits for this method
+                            contingency[i, j] = len(sig_features_by_method[method1])
+                        else:
+                            # Off-diagonal: intersection of significant hits
+                            contingency[i, j] = len(
+                                sig_features_by_method[method1] & sig_features_by_method[method2]
+                            )
+            
+            contingency_matrices[phenotype] = contingency
+        
+        # Create figure with subplots for each phenotype
+        n_phenotypes = len(contingency_matrices)
+        n_cols = min(3, n_phenotypes)
+        n_rows = (n_phenotypes + n_cols - 1) // n_cols
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+        if n_phenotypes == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+        else:
+            axes = axes.flatten()
+        
+        fig.suptitle('Binary Phenotype: Significant Hits Contingency (FDR<0.05)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Plot each contingency matrix
+        for idx, (phenotype, contingency) in enumerate(contingency_matrices.items()):
+            ax = axes[idx]
+            
+            # Create heatmap with equal aspect ratio for square plot
+            im = ax.imshow(contingency, cmap='YlOrRd', aspect='equal', vmin=0)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label('Number of Hits', rotation=270, labelpad=15)
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(len(all_methods)))
+            ax.set_yticks(np.arange(len(all_methods)))
+            ax.set_xticklabels(all_methods, rotation=45, ha='right')
+            ax.set_yticklabels(all_methods)
+            
+            # Add text annotations
+            for i in range(len(all_methods)):
+                for j in range(len(all_methods)):
+                    value = int(contingency[i, j])
+                    text_color = 'white' if contingency[i, j] > contingency.max() * 0.5 else 'black'
+                    ax.text(j, i, str(value), ha='center', va='center', 
+                           color=text_color, fontsize=10, fontweight='bold')
+            
+            ax.set_title(phenotype, fontweight='bold')
+            ax.set_xlabel('Method')
+            ax.set_ylabel('Method')
+            
+            # Add grid for clarity
+            ax.set_xticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.set_yticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.grid(which='minor', color='gray', linestyle='-', linewidth=0.5)
+            ax.tick_params(which='minor', size=0)
+            
+            # Make the plot square
+            ax.set_aspect('equal', adjustable='box')
+        
+        # Hide unused subplots
+        for idx in range(len(contingency_matrices), len(axes)):
+            axes[idx].axis('off')
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        return fig
+
+    def generate_figure_29c_significance_contingency_continuous(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 29c: Contingency matrix of significant hits (FDR<0.05) for continuous phenotypes"""
+        if not association_results:
+            print("  No continuous phenotype associations for contingency matrix")
+            return None
+        
+        print("Generating Figure 29c: Continuous phenotype significance contingency matrix...")
+        
+        # Get all available methods
+        all_methods = ['Truth']
+        if data.method1_name:
+            all_methods.append(data.method1_name)
+        if data.method2_name:
+            all_methods.append(data.method2_name)
+        if data.method3_name:
+            all_methods.append(data.method3_name)
+        if data.method4_name:
+            all_methods.append(data.method4_name)
+        
+        # Initialize contingency matrix for each phenotype
+        contingency_matrices = {}
+        
+        for phenotype, results_df in association_results.items():
+            # Create a matrix to store counts of overlapping significant hits
+            n_methods = len(all_methods)
+            contingency = np.zeros((n_methods, n_methods))
+            
+            # Get significant features for each method after FDR correction
+            sig_features_by_method = {}
+            
+            for method in all_methods:
+                method_results = results_df[results_df['method'] == method].copy()
+                if len(method_results) > 0:
+                    # Apply FDR correction
+                    _, pvals_corrected, _, _ = multipletests(
+                        method_results['p_value'].fillna(1), 
+                        method='fdr_bh', 
+                        alpha=0.05
+                    )
+                    method_results['p_adj'] = pvals_corrected
+                    
+                    # Get significant features
+                    sig_features = set(method_results[method_results['p_adj'] < 0.05]['feature'].tolist())
+                    sig_features_by_method[method] = sig_features
+                else:
+                    sig_features_by_method[method] = set()
+            
+            # Fill contingency matrix with overlap counts
+            for i, method1 in enumerate(all_methods):
+                for j, method2 in enumerate(all_methods):
+                    if method1 in sig_features_by_method and method2 in sig_features_by_method:
+                        if i == j:
+                            # Diagonal: total significant hits for this method
+                            contingency[i, j] = len(sig_features_by_method[method1])
+                        else:
+                            # Off-diagonal: intersection of significant hits
+                            contingency[i, j] = len(
+                                sig_features_by_method[method1] & sig_features_by_method[method2]
+                            )
+            
+            contingency_matrices[phenotype] = contingency
+        
+        # Create figure with subplots for each phenotype
+        n_phenotypes = len(contingency_matrices)
+        n_cols = min(3, n_phenotypes)
+        n_rows = (n_phenotypes + n_cols - 1) // n_cols
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+        if n_phenotypes == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+        else:
+            axes = axes.flatten()
+        
+        fig.suptitle('Continuous Phenotype: Significant Hits Contingency (FDR<0.05)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Plot each contingency matrix
+        for idx, (phenotype, contingency) in enumerate(contingency_matrices.items()):
+            ax = axes[idx]
+            
+            # Create heatmap with equal aspect ratio for square plot
+            im = ax.imshow(contingency, cmap='YlGnBu', aspect='equal', vmin=0)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label('Number of Hits', rotation=270, labelpad=15)
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(len(all_methods)))
+            ax.set_yticks(np.arange(len(all_methods)))
+            ax.set_xticklabels(all_methods, rotation=45, ha='right')
+            ax.set_yticklabels(all_methods)
+            
+            # Add text annotations
+            for i in range(len(all_methods)):
+                for j in range(len(all_methods)):
+                    value = int(contingency[i, j])
+                    text_color = 'white' if contingency[i, j] > contingency.max() * 0.5 else 'black'
+                    ax.text(j, i, str(value), ha='center', va='center', 
+                           color=text_color, fontsize=10, fontweight='bold')
+            
+            ax.set_title(phenotype, fontweight='bold')
+            ax.set_xlabel('Method')
+            ax.set_ylabel('Method')
+            
+            # Add grid for clarity
+            ax.set_xticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.set_yticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.grid(which='minor', color='gray', linestyle='-', linewidth=0.5)
+            ax.tick_params(which='minor', size=0)
+            
+            # Make the plot square
+            ax.set_aspect('equal', adjustable='box')
+        
+        # Hide unused subplots
+        for idx in range(len(contingency_matrices), len(axes)):
+            axes[idx].axis('off')
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        return fig
 
     def generate_figure_28_phenotype_forest_plots_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
         """Figure 28: Forest plots for binary phenotype associations (forest plots only)"""
@@ -1511,13 +1757,14 @@ class ComparativeAnalyzer:
             
             # Prepare data for forest plot
             y_positions = {}
-            current_y = 0
+            # Start from high y-value and decrease, so most significant features appear at top
+            current_y = (len(top_features) - 1) * 2
             
             for feature in top_features:
                 feature_data = plot_data[plot_data['feature'] == feature]
                 if len(feature_data) > 0:
                     y_positions[feature] = current_y
-                    current_y += 2  # spacing per feature remains the same
+                    current_y -= 2  # decrease y position for next feature
             
             # Plot forest plot
             for method in ['Truth'] + [m for m in plot_data['method'].unique() if m != 'Truth']:
@@ -1651,13 +1898,14 @@ class ComparativeAnalyzer:
             
             # Prepare data for forest plot
             y_positions = {}
-            current_y = 0
+            # Start from high y-value and decrease, so most significant features appear at top
+            current_y = (len(top_features) - 1) * 2
             
             for feature in top_features:
                 feature_data = plot_data[plot_data['feature'] == feature]
                 if len(feature_data) > 0:
                     y_positions[feature] = current_y
-                    current_y += 2  # spacing per feature remains the same
+                    current_y -= 2  # decrease y position for next feature
             
             # Plot forest plot
             for method in ['Truth'] + [m for m in plot_data['method'].unique() if m != 'Truth']:
@@ -5291,6 +5539,11 @@ class ComparativeAnalyzer:
                     self.save_figure(fig28b, "figure_28b_phenotype_summary_binary")
                     plt.close(fig28b)
                     phenotype_figures.append("figure_28b_phenotype_summary_binary")
+                fig28c = self.generate_figure_28c_significance_contingency_binary(data, binary_results)
+                if fig28c is not None:
+                    self.save_figure(fig28c, "figure_28c_significance_contingency_binary")
+                    plt.close(fig28c)
+                    phenotype_figures.append("figure_28c_significance_contingency_binary")
             except Exception as e:
                 print(f"    Error generating figure 28: {str(e)}")
         
@@ -5306,6 +5559,11 @@ class ComparativeAnalyzer:
                     self.save_figure(fig29b, "figure_29b_phenotype_summary_continuous")
                     plt.close(fig29b)
                     phenotype_figures.append("figure_29b_phenotype_summary_continuous")
+                fig29c = self.generate_figure_29c_significance_contingency_continuous(data, continuous_results)
+                if fig29c is not None:
+                    self.save_figure(fig29c, "figure_29c_significance_contingency_continuous")
+                    plt.close(fig29c)
+                    phenotype_figures.append("figure_29c_significance_contingency_continuous")
             except Exception as e:
                 print(f"    Error generating figure 29: {str(e)}")
         
