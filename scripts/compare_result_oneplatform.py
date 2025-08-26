@@ -885,17 +885,34 @@ class ComparativeAnalyzer:
         
         return results
     
-    def _calculate_association_mae_binary(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, float]:
-        """Calculate mean absolute error of odds ratios for each method compared to Truth (only for significant Truth associations)"""
+    def _calculate_association_mae_binary(self, association_results: Dict[str, pd.DataFrame], return_raw: bool = False) -> Dict[str, float]:
+        """Calculate mean absolute error of odds ratios for binary phenotype associations.
+        
+        Compares each method's odds ratios against the Truth method, considering only
+        features that are statistically significant in the Truth method after FDR correction.
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, odds_ratio, p_value
+            return_raw: If True, returns per-phenotype MAE values for each method.
+                       If False, returns averaged MAE across all phenotypes.
+        
+        Returns:
+            Dictionary mapping method names to MAE values. If return_raw=True, values are
+            lists of per-phenotype MAEs. If return_raw=False, values are mean MAEs across
+            all phenotypes.
+            
+        Note:
+            Only considers features with FDR-corrected p-values < 0.05 in the Truth method.
+            Filters out infinite or NaN odds ratios before calculation.
+        """
         mae_results = {}
         
         for phenotype, results_df in association_results.items():
-            # Get Truth results as reference
             truth_results = results_df[results_df['method'] == 'Truth'].copy()
             if len(truth_results) == 0:
                 continue
             
-            # Apply FDR and filter for significant Truth associations only (p_adj < 0.05)
             _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
             truth_results['p_adj'] = pvals_corrected
             significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
@@ -905,7 +922,6 @@ class ComparativeAnalyzer:
             significant_truth = significant_truth.set_index('feature')
             significant_features = significant_truth.index
             
-            # Calculate MAE for each method
             for method in results_df['method'].unique():
                 if method == 'Truth':
                     continue
@@ -913,28 +929,26 @@ class ComparativeAnalyzer:
                 method_results = results_df[results_df['method'] == method].copy()
                 method_results = method_results.set_index('feature')
                 
-                # Find common features that are significant in Truth
                 common_features = significant_features.intersection(method_results.index)
                 if len(common_features) == 0:
                     continue
                 
-                # Get odds ratios directly (no log transformation) for significant features only
                 truth_or = significant_truth.loc[common_features, 'odds_ratio']
                 method_or = method_results.loc[common_features, 'odds_ratio']
                 
-                # Remove any infinite or NaN values
                 mask = np.isfinite(truth_or) & np.isfinite(method_or) & (truth_or > 0) & (method_or > 0)
                 if np.sum(mask) == 0:
                     continue
                 
-                # Calculate MAE
                 mae = np.mean(np.abs(truth_or[mask] - method_or[mask]))
                 
                 if method not in mae_results:
                     mae_results[method] = []
                 mae_results[method].append(mae)
         
-        # Average across phenotypes
+        if return_raw:
+            return mae_results
+        
         final_mae = {}
         for method, values in mae_results.items():
             if values:
@@ -942,17 +956,34 @@ class ComparativeAnalyzer:
         
         return final_mae
     
-    def _calculate_association_mae_continuous(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, float]:
-        """Calculate mean absolute error of beta coefficients for each method compared to Truth (only for significant Truth associations)"""
+    def _calculate_association_mae_continuous(self, association_results: Dict[str, pd.DataFrame], return_raw: bool = False) -> Dict[str, float]:
+        """Calculate mean absolute error of beta coefficients for continuous phenotype associations.
+        
+        Compares each method's beta coefficients against the Truth method, considering only
+        features that are statistically significant in the Truth method after FDR correction.
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, beta, p_value
+            return_raw: If True, returns per-phenotype MAE values for each method.
+                       If False, returns averaged MAE across all phenotypes.
+        
+        Returns:
+            Dictionary mapping method names to MAE values. If return_raw=True, values are
+            lists of per-phenotype MAEs. If return_raw=False, values are mean MAEs across
+            all phenotypes.
+            
+        Note:
+            Only considers features with FDR-corrected p-values < 0.05 in the Truth method.
+            Filters out NaN beta coefficients before calculation.
+        """
         mae_results = {}
         
         for phenotype, results_df in association_results.items():
-            # Get Truth results as reference
             truth_results = results_df[results_df['method'] == 'Truth'].copy()
             if len(truth_results) == 0:
                 continue
             
-            # Apply FDR and filter for significant Truth associations only (p_adj < 0.05)
             _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
             truth_results['p_adj'] = pvals_corrected
             significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
@@ -962,7 +993,6 @@ class ComparativeAnalyzer:
             significant_truth = significant_truth.set_index('feature')
             significant_features = significant_truth.index
             
-            # Calculate MAE for each method
             for method in results_df['method'].unique():
                 if method == 'Truth':
                     continue
@@ -970,28 +1000,26 @@ class ComparativeAnalyzer:
                 method_results = results_df[results_df['method'] == method].copy()
                 method_results = method_results.set_index('feature')
                 
-                # Find common features that are significant in Truth
                 common_features = significant_features.intersection(method_results.index)
                 if len(common_features) == 0:
                     continue
                 
-                # Get beta coefficients for significant features only
                 truth_beta = significant_truth.loc[common_features, 'beta']
                 method_beta = method_results.loc[common_features, 'beta']
                 
-                # Remove any NaN values
                 mask = np.isfinite(truth_beta) & np.isfinite(method_beta)
                 if np.sum(mask) == 0:
                     continue
                 
-                # Calculate MAE
                 mae = np.mean(np.abs(truth_beta[mask] - method_beta[mask]))
                 
                 if method not in mae_results:
                     mae_results[method] = []
                 mae_results[method].append(mae)
         
-        # Average across phenotypes
+        if return_raw:
+            return mae_results
+        
         final_mae = {}
         for method, values in mae_results.items():
             if values:
@@ -999,23 +1027,39 @@ class ComparativeAnalyzer:
         
         return final_mae
 
-    def _calculate_effect_correlation_binary(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, float]:
-        """Calculate mean Spearman correlation of effect sizes (log OR) for each method vs Truth
-        using only Truth-significant features after FDR per phenotype."""
+    def _calculate_effect_correlation_binary(self, association_results: Dict[str, pd.DataFrame], return_raw: bool = False) -> Dict[str, float]:
+        """Calculate Spearman correlation of effect sizes for binary phenotype associations.
+        
+        Computes correlation between log odds ratios from each method versus the Truth method,
+        considering only features that are statistically significant in the Truth method after 
+        FDR correction per phenotype.
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, odds_ratio, p_value
+            return_raw: If True, returns per-phenotype correlation values for each method.
+                       If False, returns mean correlation across all phenotypes.
+        
+        Returns:
+            Dictionary mapping method names to correlation values. If return_raw=True, values are
+            lists of per-phenotype correlations. If return_raw=False, values are mean correlations
+            across all phenotypes.
+            
+        Note:
+            Uses logarithm of odds ratios as effect size measure. Only considers features with 
+            FDR-corrected p-values < 0.05 in the Truth method. Filters out invalid odds ratios.
+        """
         corr_lists: Dict[str, List[float]] = {}
         for phenotype, results_df in association_results.items():
             truth_results = results_df[results_df['method'] == 'Truth'].copy()
             if truth_results.empty:
                 continue
-            # FDR on Truth
             _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
             truth_results['p_adj'] = pvals_corrected
             sig_truth = truth_results[truth_results['p_adj'] < 0.05].set_index('feature')
             if sig_truth.empty:
                 continue
-            # Use log(OR) as effect size
             truth_or = sig_truth['odds_ratio']
-            # Filter invalid ORs
             valid_mask_truth = np.isfinite(truth_or) & (truth_or > 0)
             sig_truth = sig_truth[valid_mask_truth]
             for method in results_df['method'].unique():
@@ -1030,24 +1074,44 @@ class ComparativeAnalyzer:
                 mask = np.isfinite(or_truth) & np.isfinite(or_method) & (or_truth > 0) & (or_method > 0)
                 if mask.sum() == 0:
                     continue
-                # Spearman on log(OR)
                 r, _ = stats.spearmanr(np.log(or_truth[mask]), np.log(or_method[mask]))
                 if method not in corr_lists:
                     corr_lists[method] = []
                 if np.isfinite(r):
                     corr_lists[method].append(float(r))
-        # Average across phenotypes
+        
+        if return_raw:
+            return corr_lists
+            
         return {m: float(np.mean(v)) for m, v in corr_lists.items() if len(v) > 0}
 
-    def _calculate_effect_correlation_continuous(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, float]:
-        """Calculate mean Spearman correlation of beta coefficients for each method vs Truth
-        using only Truth-significant features after FDR per phenotype."""
+    def _calculate_effect_correlation_continuous(self, association_results: Dict[str, pd.DataFrame], return_raw: bool = False) -> Dict[str, float]:
+        """Calculate Spearman correlation of effect sizes for continuous phenotype associations.
+        
+        Computes correlation between beta coefficients from each method versus the Truth method,
+        considering only features that are statistically significant in the Truth method after 
+        FDR correction per phenotype.
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, beta, p_value
+            return_raw: If True, returns per-phenotype correlation values for each method.
+                       If False, returns mean correlation across all phenotypes.
+        
+        Returns:
+            Dictionary mapping method names to correlation values. If return_raw=True, values are
+            lists of per-phenotype correlations. If return_raw=False, values are mean correlations
+            across all phenotypes.
+            
+        Note:
+            Uses beta coefficients as effect size measure. Only considers features with 
+            FDR-corrected p-values < 0.05 in the Truth method. Filters out NaN values.
+        """
         corr_lists: Dict[str, List[float]] = {}
         for phenotype, results_df in association_results.items():
             truth_results = results_df[results_df['method'] == 'Truth'].copy()
             if truth_results.empty:
                 continue
-            # FDR on Truth
             _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
             truth_results['p_adj'] = pvals_corrected
             sig_truth = truth_results[truth_results['p_adj'] < 0.05].set_index('feature')
@@ -1070,7 +1134,229 @@ class ComparativeAnalyzer:
                     corr_lists[method] = []
                 if np.isfinite(r):
                     corr_lists[method].append(float(r))
+        
+        if return_raw:
+            return corr_lists
+            
         return {m: float(np.mean(v)) for m, v in corr_lists.items() if len(v) > 0}
+    
+    def _calculate_association_mae_binary_per_feature(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate mean absolute error of odds ratios for each individual significant feature.
+        
+        Returns individual MAE values for every significant feature across all phenotypes,
+        instead of aggregating by phenotype.
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, odds_ratio, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual feature MAE values.
+            Each value represents one significant feature from any phenotype.
+        """
+        mae_results = {}
+        
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
+            if len(significant_truth) == 0:
+                continue
+                
+            significant_truth = significant_truth.set_index('feature')
+            significant_features = significant_truth.index
+            
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                    
+                method_results = results_df[results_df['method'] == method].copy()
+                method_results = method_results.set_index('feature')
+                
+                common_features = significant_features.intersection(method_results.index)
+                if len(common_features) == 0:
+                    continue
+                
+                for feature in common_features:
+                    truth_or = significant_truth.loc[feature, 'odds_ratio']
+                    method_or = method_results.loc[feature, 'odds_ratio']
+                    
+                    if (np.isfinite(truth_or) and np.isfinite(method_or) and 
+                        truth_or > 0 and method_or > 0):
+                        mae = abs(truth_or - method_or)
+                        
+                        if method not in mae_results:
+                            mae_results[method] = []
+                        mae_results[method].append(mae)
+        
+        return mae_results
+    
+    def _calculate_association_mae_continuous_per_feature(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate mean absolute error of beta coefficients for each individual significant feature.
+        
+        Returns individual MAE values for every significant feature across all phenotypes,
+        instead of aggregating by phenotype.
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, beta, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual feature MAE values.
+            Each value represents one significant feature from any phenotype.
+        """
+        mae_results = {}
+        
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
+            if len(significant_truth) == 0:
+                continue
+                
+            significant_truth = significant_truth.set_index('feature')
+            significant_features = significant_truth.index
+            
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                    
+                method_results = results_df[results_df['method'] == method].copy()
+                method_results = method_results.set_index('feature')
+                
+                common_features = significant_features.intersection(method_results.index)
+                if len(common_features) == 0:
+                    continue
+                
+                for feature in common_features:
+                    truth_beta = significant_truth.loc[feature, 'beta']
+                    method_beta = method_results.loc[feature, 'beta']
+                    
+                    if np.isfinite(truth_beta) and np.isfinite(method_beta):
+                        mae = abs(truth_beta - method_beta)
+                        
+                        if method not in mae_results:
+                            mae_results[method] = []
+                        mae_results[method].append(mae)
+        
+        return mae_results
+    
+    def _calculate_effect_size_diff_binary_per_feature(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate effect size differences (log OR) for each individual significant feature.
+        
+        Returns individual log(OR) differences for every significant feature across all phenotypes.
+        Difference = log(method_OR) - log(truth_OR)
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, odds_ratio, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual effect size differences.
+            Each value represents one significant feature from any phenotype.
+        """
+        diff_results = {}
+        
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
+            if len(significant_truth) == 0:
+                continue
+                
+            significant_truth = significant_truth.set_index('feature')
+            significant_features = significant_truth.index
+            
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                    
+                method_results = results_df[results_df['method'] == method].copy()
+                method_results = method_results.set_index('feature')
+                
+                common_features = significant_features.intersection(method_results.index)
+                if len(common_features) == 0:
+                    continue
+                
+                for feature in common_features:
+                    truth_or = significant_truth.loc[feature, 'odds_ratio']
+                    method_or = method_results.loc[feature, 'odds_ratio']
+                    
+                    if (np.isfinite(truth_or) and np.isfinite(method_or) and 
+                        truth_or > 0 and method_or > 0):
+                        log_or_diff = np.log(method_or) - np.log(truth_or)
+                        
+                        if method not in diff_results:
+                            diff_results[method] = []
+                        diff_results[method].append(log_or_diff)
+        
+        return diff_results
+    
+    def _calculate_effect_size_diff_continuous_per_feature(self, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate effect size differences (beta) for each individual significant feature.
+        
+        Returns individual beta differences for every significant feature across all phenotypes.
+        Difference = method_beta - truth_beta
+        
+        Args:
+            association_results: Dictionary mapping phenotype names to DataFrames containing
+                               association results with columns: method, feature, beta, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual effect size differences.
+            Each value represents one significant feature from any phenotype.
+        """
+        diff_results = {}
+        
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05].copy()
+            if len(significant_truth) == 0:
+                continue
+                
+            significant_truth = significant_truth.set_index('feature')
+            significant_features = significant_truth.index
+            
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                    
+                method_results = results_df[results_df['method'] == method].copy()
+                method_results = method_results.set_index('feature')
+                
+                common_features = significant_features.intersection(method_results.index)
+                if len(common_features) == 0:
+                    continue
+                
+                for feature in common_features:
+                    truth_beta = significant_truth.loc[feature, 'beta']
+                    method_beta = method_results.loc[feature, 'beta']
+                    
+                    if np.isfinite(truth_beta) and np.isfinite(method_beta):
+                        beta_diff = method_beta - truth_beta
+                        
+                        if method not in diff_results:
+                            diff_results[method] = []
+                        diff_results[method].append(beta_diff)
+        
+        return diff_results
     
     def generate_figure_26_comprehensive_method_comparison(self, data: AnalysisData):
         """Figure 26: Comprehensive comparison of all available methods (mean and median correlations)"""
@@ -1310,65 +1596,88 @@ class ComparativeAnalyzer:
         return fig
     
     def generate_figure_28b_phenotype_summary_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
-        """Figure 28b: Binary phenotype association summaries (MAE and effect correlation) with square panels"""
+        """Generate Figure 28b: Binary phenotype association performance summary with violin plots.
+        
+        Creates a comprehensive visualization comparing method performance on binary phenotype
+        associations using two key metrics: Mean Absolute Error (MAE) of odds ratios and
+        Spearman correlation of effect sizes (log odds ratios).
+        
+        Args:
+            data: AnalysisData object containing method configuration and metadata
+            association_results: Dictionary mapping phenotype names to DataFrames with
+                               association results containing columns: method, feature, odds_ratio, p_value
+        
+        Returns:
+            matplotlib.figure.Figure: Two-panel figure with violin plots showing:
+                - Left panel: MAE distribution across phenotypes for each method
+                - Right panel: Effect correlation distribution across phenotypes for each method
+                Returns None if no association results available.
+                
+        Note:
+            Excludes Method4 if present. Only considers Truth-significant features (FDR < 0.05).
+            Violin plots show distribution, mean, median, and summary statistics.
+        """
         if not association_results:
             print("  No binary phenotype associations to summarize")
             return None
         
-        mae_results = self._calculate_association_mae_binary(association_results)
-        corr_results = self._calculate_effect_correlation_binary(association_results)
+        mae_results_raw = self._calculate_association_mae_binary_per_feature(association_results)
+        diff_results_raw = self._calculate_effect_size_diff_binary_per_feature(association_results)
         
-        # Method colors: Truth=black, Method1=red, Method2=blue, Method3=green, Method4=yellow/orange
-        method_colors = {
-            'Truth': 'black',
-            data.method1_name: NATURE_COLORS['primary'],
-            data.method2_name: NATURE_COLORS['secondary']
-        }
-        if data.method3_name:
-            method_colors[data.method3_name] = NATURE_COLORS['accent']
         if data.method4_name:
-            method_colors[data.method4_name] = NATURE_COLORS['highlight']
+            mae_results_raw = {k: v for k, v in mae_results_raw.items() if k != data.method4_name}
+            diff_results_raw = {k: v for k, v in diff_results_raw.items() if k != data.method4_name}
+        
+        colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], NATURE_COLORS['accent']]
         
         fig, (ax_mae, ax_corr) = plt.subplots(1, 2, figsize=(12, 6))
-        fig.suptitle('Binary Phenotype Associations: MAE and Effect Correlation', fontsize=16, fontweight='bold')
-        
-        # MAE panel
-        if mae_results:
-            methods = list(mae_results.keys())
-            mae_values = [mae_results[m] for m in methods]
-            ax_mae.bar(range(len(methods)), mae_values,
-                       color=[method_colors.get(m, 'gray') for m in methods],
-                       alpha=0.7, edgecolor='black', linewidth=0.5)
-            for i, (method, value) in enumerate(zip(methods, mae_values)):
-                ax_mae.text(i, value + 0.01 * max(mae_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-            ax_mae.set_xlabel('Method')
-            ax_mae.set_ylabel('Mean Absolute Error')
-            ax_mae.set_title('MAE of Odds Ratios vs Truth (FDR<0.05)', fontweight='bold')
-            ax_mae.set_xticks(range(len(methods)))
-            ax_mae.set_xticklabels(methods, rotation=45, ha='right')
-            ax_mae.grid(True, alpha=0.3, axis='y')
+        fig.suptitle('Binary Phenotype Associations: MAE and Effect Size Difference (Bar Plots)', fontsize=16, fontweight='bold')
+        if mae_results_raw:
+            methods = list(mae_results_raw.keys())
+            valid_methods = [m for m in methods if len(mae_results_raw[m]) > 0]
+            
+            if valid_methods:
+                # Calculate mean MAE for each method
+                mean_mae = [np.mean(mae_results_raw[m]) for m in valid_methods]
+                
+                # Create bar plot
+                x_pos = np.arange(len(valid_methods))
+                bars = ax_mae.bar(x_pos, mean_mae, color=[colors[i % len(colors)] for i in range(len(valid_methods))], 
+                                 alpha=0.8, edgecolor='black', linewidth=0.8)
+                
+                ax_mae.set_xlabel('Method')
+                ax_mae.set_ylabel('Mean Absolute Error')
+                ax_mae.set_title('MAE of Odds Ratios vs Truth (FDR<0.05)', fontweight='bold')
+                ax_mae.set_xticks(x_pos)
+                ax_mae.set_xticklabels(valid_methods, rotation=45, ha='right')
+                ax_mae.grid(True, alpha=0.3, axis='y')
         else:
             ax_mae.text(0.5, 0.5, 'No MAE data available', transform=ax_mae.transAxes, ha='center', va='center')
             ax_mae.set_title('MAE of Odds Ratios vs Truth (FDR<0.05)')
         
-        # Correlation panel
-        if corr_results:
-            methods_c = list(corr_results.keys())
-            corr_values = [corr_results[m] for m in methods_c]
-            ax_corr.bar(range(len(methods_c)), corr_values,
-                        color=[method_colors.get(m, 'gray') for m in methods_c],
-                        alpha=0.7, edgecolor='black', linewidth=0.5)
-            for i, (method, value) in enumerate(zip(methods_c, corr_values)):
-                ax_corr.text(i, value + 0.01 * max(corr_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-            ax_corr.set_xlabel('Method')
-            ax_corr.set_ylabel('Spearman r (log OR)')
-            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)', fontweight='bold')
-            ax_corr.set_xticks(range(len(methods_c)))
-            ax_corr.set_xticklabels(methods_c, rotation=45, ha='right')
-            ax_corr.grid(True, alpha=0.3, axis='y')
+        # Effect size difference panel - bar plot
+        if diff_results_raw:
+            methods_c = list(diff_results_raw.keys())
+            valid_methods_c = [m for m in methods_c if len(diff_results_raw[m]) > 0]
+            
+            if valid_methods_c:
+                # Calculate mean effect size difference for each method
+                mean_diff = [np.mean(diff_results_raw[m]) for m in valid_methods_c]
+                
+                # Create bar plot
+                x_pos_c = np.arange(len(valid_methods_c))
+                bars_c = ax_corr.bar(x_pos_c, mean_diff, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
+                                    alpha=0.8, edgecolor='black', linewidth=0.8)
+                
+                ax_corr.set_xlabel('Method')
+                ax_corr.set_ylabel('Log OR Difference')
+                ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)', fontweight='bold')
+                ax_corr.set_xticks(x_pos_c)
+                ax_corr.set_xticklabels(valid_methods_c, rotation=45, ha='right')
+                ax_corr.grid(True, alpha=0.3, axis='y')
         else:
-            ax_corr.text(0.5, 0.5, 'No correlation data available', transform=ax_corr.transAxes, ha='center', va='center')
-            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)')
+            ax_corr.text(0.5, 0.5, 'No effect size difference data available', transform=ax_corr.transAxes, ha='center', va='center')
+            ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)')
         
         # Make panels square without distorting data aspect
         ax_mae.set_box_aspect(1)
@@ -1378,65 +1687,90 @@ class ComparativeAnalyzer:
         return fig
 
     def generate_figure_29b_phenotype_summary_continuous(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
-        """Figure 29b: Continuous phenotype association summaries (MAE and effect correlation) with square panels"""
+        """Generate Figure 29b: Continuous phenotype association performance summary with violin plots.
+        
+        Creates a comprehensive visualization comparing method performance on continuous phenotype
+        associations using two key metrics: Mean Absolute Error (MAE) of beta coefficients and
+        Spearman correlation of effect sizes (beta coefficients).
+        
+        Args:
+            data: AnalysisData object containing method configuration and metadata
+            association_results: Dictionary mapping phenotype names to DataFrames with
+                               association results containing columns: method, feature, beta, p_value
+        
+        Returns:
+            matplotlib.figure.Figure: Two-panel figure with violin plots showing:
+                - Left panel: MAE distribution across phenotypes for each method
+                - Right panel: Effect correlation distribution across phenotypes for each method
+                Returns None if no association results available.
+                
+        Note:
+            Excludes Method4 if present. Only considers Truth-significant features (FDR < 0.05).
+            Violin plots show distribution, mean, median, and summary statistics.
+        """
         if not association_results:
             print("  No continuous phenotype associations to summarize")
             return None
         
-        mae_results = self._calculate_association_mae_continuous(association_results)
-        corr_results = self._calculate_effect_correlation_continuous(association_results)
+        mae_results_raw = self._calculate_association_mae_continuous_per_feature(association_results)
+        diff_results_raw = self._calculate_effect_size_diff_continuous_per_feature(association_results)
         
-        # Method colors: Truth=black, Method1=red, Method2=blue, Method3=green, Method4=yellow/orange
-        method_colors = {
-            'Truth': 'black',
-            data.method1_name: NATURE_COLORS['primary'],
-            data.method2_name: NATURE_COLORS['secondary']
-        }
-        if data.method3_name:
-            method_colors[data.method3_name] = NATURE_COLORS['accent']
         if data.method4_name:
-            method_colors[data.method4_name] = NATURE_COLORS['highlight']
+            mae_results_raw = {k: v for k, v in mae_results_raw.items() if k != data.method4_name}
+            diff_results_raw = {k: v for k, v in diff_results_raw.items() if k != data.method4_name}
+        
+        colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], NATURE_COLORS['accent']]
         
         fig, (ax_mae, ax_corr) = plt.subplots(1, 2, figsize=(12, 6))
-        fig.suptitle('Continuous Phenotype Associations: MAE and Effect Correlation', fontsize=16, fontweight='bold')
+        fig.suptitle('Continuous Phenotype Associations: MAE and Effect Size Difference (Bar Plots)', fontsize=16, fontweight='bold')
         
-        # MAE panel
-        if mae_results:
-            methods = list(mae_results.keys())
-            mae_values = [mae_results[m] for m in methods]
-            ax_mae.bar(range(len(methods)), mae_values,
-                       color=[method_colors.get(m, 'gray') for m in methods],
-                       alpha=0.7, edgecolor='black', linewidth=0.5)
-            for i, (method, value) in enumerate(zip(methods, mae_values)):
-                ax_mae.text(i, value + 0.01 * max(mae_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-            ax_mae.set_xlabel('Method')
-            ax_mae.set_ylabel('Mean Absolute Error')
-            ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)', fontweight='bold')
-            ax_mae.set_xticks(range(len(methods)))
-            ax_mae.set_xticklabels(methods, rotation=45, ha='right')
-            ax_mae.grid(True, alpha=0.3, axis='y')
+        # MAE panel - bar plot
+        if mae_results_raw:
+            methods = list(mae_results_raw.keys())
+            valid_methods = [m for m in methods if len(mae_results_raw[m]) > 0]
+            
+            if valid_methods:
+                # Calculate mean MAE for each method
+                mean_mae = [np.mean(mae_results_raw[m]) for m in valid_methods]
+                
+                # Create bar plot
+                x_pos = np.arange(len(valid_methods))
+                bars = ax_mae.bar(x_pos, mean_mae, color=[colors[i % len(colors)] for i in range(len(valid_methods))], 
+                                 alpha=0.8, edgecolor='black', linewidth=0.8)
+                
+                ax_mae.set_xlabel('Method')
+                ax_mae.set_ylabel('Mean Absolute Error')
+                ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)', fontweight='bold')
+                ax_mae.set_xticks(x_pos)
+                ax_mae.set_xticklabels(valid_methods, rotation=45, ha='right')
+                ax_mae.grid(True, alpha=0.3, axis='y')
         else:
             ax_mae.text(0.5, 0.5, 'No MAE data available', transform=ax_mae.transAxes, ha='center', va='center')
             ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)')
         
-        # Correlation panel
-        if corr_results:
-            methods_c = list(corr_results.keys())
-            corr_values = [corr_results[m] for m in methods_c]
-            ax_corr.bar(range(len(methods_c)), corr_values,
-                        color=[method_colors.get(m, 'gray') for m in methods_c],
-                        alpha=0.7, edgecolor='black', linewidth=0.5)
-            for i, (method, value) in enumerate(zip(methods_c, corr_values)):
-                ax_corr.text(i, value + 0.01 * max(corr_values), f'{value:.3f}', ha='center', va='bottom', fontsize=9)
-            ax_corr.set_xlabel('Method')
-            ax_corr.set_ylabel('Spearman r (beta)')
-            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)', fontweight='bold')
-            ax_corr.set_xticks(range(len(methods_c)))
-            ax_corr.set_xticklabels(methods_c, rotation=45, ha='right')
-            ax_corr.grid(True, alpha=0.3, axis='y')
+        # Effect size difference panel - bar plot
+        if diff_results_raw:
+            methods_c = list(diff_results_raw.keys())
+            valid_methods_c = [m for m in methods_c if len(diff_results_raw[m]) > 0]
+            
+            if valid_methods_c:
+                # Calculate mean effect size difference for each method
+                mean_diff = [np.mean(diff_results_raw[m]) for m in valid_methods_c]
+                
+                # Create bar plot
+                x_pos_c = np.arange(len(valid_methods_c))
+                bars_c = ax_corr.bar(x_pos_c, mean_diff, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
+                                    alpha=0.8, edgecolor='black', linewidth=0.8)
+                
+                ax_corr.set_xlabel('Method')
+                ax_corr.set_ylabel('Beta Difference')
+                ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)', fontweight='bold')
+                ax_corr.set_xticks(x_pos_c)
+                ax_corr.set_xticklabels(valid_methods_c, rotation=45, ha='right')
+                ax_corr.grid(True, alpha=0.3, axis='y')
         else:
-            ax_corr.text(0.5, 0.5, 'No correlation data available', transform=ax_corr.transAxes, ha='center', va='center')
-            ax_corr.set_title('Effect Correlation vs Truth (FDR<0.05)')
+            ax_corr.text(0.5, 0.5, 'No effect size difference data available', transform=ax_corr.transAxes, ha='center', va='center')
+            ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)')
         
         # Make panels square without distorting data aspect
         ax_mae.set_box_aspect(1)
@@ -1528,7 +1862,7 @@ class ComparativeAnalyzer:
             ax = axes[idx]
             
             # Create heatmap with equal aspect ratio for square plot
-            im = ax.imshow(contingency, cmap='YlOrRd', aspect='equal', vmin=0)
+            im = ax.imshow(contingency, cmap='YlGnBu', aspect='equal', vmin=0)
             
             # Add colorbar
             cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)

@@ -1693,22 +1693,22 @@ class ImportanceMatrixAnalyzer:
             
             # Top left: Mean rank vs rank variance
             scatter = axes[0, 0].scatter(rank_stats['mean_rank'], rank_stats['rank_variance'], 
-                                       alpha=0.6, s=10, color=COLORS['primary'])
+                                       alpha=0.6, s=3, color=COLORS['secondary'])
             axes[0, 0].set_xlabel('Mean Rank (lower = more important)')
             axes[0, 0].set_ylabel('Rank Variance (higher = less consistent)')
             axes[0, 0].set_title(f'{data.platform_a_name} → {data.platform_b_name}: Consistency vs Importance')
             
             # Highlight interesting features
-            consistent_important = rank_stats[(rank_stats['mean_rank'] < rank_stats['mean_rank'].quantile(0.25)) & 
-                                            (rank_stats['rank_variance'] < rank_stats['rank_variance'].quantile(0.25))]
+            consistent_important = rank_stats[(rank_stats['mean_rank'] < rank_stats['mean_rank'].quantile(0.10)) & 
+                                            (rank_stats['rank_variance'] < rank_stats['rank_variance'].quantile(0.10))]
             if len(consistent_important) > 0:
                 axes[0, 0].scatter(consistent_important['mean_rank'], consistent_important['rank_variance'], 
-                                 color=COLORS['accent'], s=10, label='Consistently Important', alpha=0.8)
+                                 color=COLORS['accent'], s=3, label='Consistently Important', alpha=0.8)
             
             inconsistent = rank_stats[rank_stats['rank_variance'] > rank_stats['rank_variance'].quantile(0.9)]
             if len(inconsistent) > 0:
                 axes[0, 0].scatter(inconsistent['mean_rank'], inconsistent['rank_variance'], 
-                                 color=COLORS['warning'], s=10, label='Highly Variable', alpha=0.8)
+                                 color=COLORS['warning'], s=3, label='Highly Variable', alpha=0.8)
             
             axes[0, 0].legend()
             
@@ -1728,22 +1728,22 @@ class ImportanceMatrixAnalyzer:
             
             # Bottom left: Mean rank vs rank variance
             scatter = axes[1, 0].scatter(rank_stats['mean_rank'], rank_stats['rank_variance'], 
-                                       alpha=0.6, s=10, color=COLORS['secondary'])
+                                       alpha=0.6, s=3, color=COLORS['secondary'])
             axes[1, 0].set_xlabel('Mean Rank (lower = more important)')
             axes[1, 0].set_ylabel('Rank Variance (higher = less consistent)')
             axes[1, 0].set_title(f'{data.platform_b_name} → {data.platform_a_name}: Consistency vs Importance')
             
             # Highlight interesting features
-            consistent_important = rank_stats[(rank_stats['mean_rank'] < rank_stats['mean_rank'].quantile(0.25)) & 
-                                            (rank_stats['rank_variance'] < rank_stats['rank_variance'].quantile(0.25))]
+            consistent_important = rank_stats[(rank_stats['mean_rank'] < rank_stats['mean_rank'].quantile(0.10)) & 
+                                            (rank_stats['rank_variance'] < rank_stats['rank_variance'].quantile(0.10))]
             if len(consistent_important) > 0:
                 axes[1, 0].scatter(consistent_important['mean_rank'], consistent_important['rank_variance'], 
-                                 color=COLORS['accent'], s=10, label='Consistently Important', alpha=0.8)
+                                 color=COLORS['accent'], s=3, label='Consistently Important', alpha=0.8)
             
             inconsistent = rank_stats[rank_stats['rank_variance'] > rank_stats['rank_variance'].quantile(0.9)]
             if len(inconsistent) > 0:
                 axes[1, 0].scatter(inconsistent['mean_rank'], inconsistent['rank_variance'], 
-                                 color=COLORS['warning'], s=10, label='Highly Variable', alpha=0.8)
+                                 color=COLORS['warning'], s=3, label='Highly Variable', alpha=0.8)
             
             axes[1, 0].legend()
             

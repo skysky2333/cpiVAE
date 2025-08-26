@@ -55,6 +55,9 @@ python scripts/latent_space_analysis.py \
     --platform_b_name "O->S" \
     --output_dir output_comparisions_latent
 
+# filter ppi network with expression data
+python scripts/filter_ppi_network.py data/9606.protein.links.v12.0_converted.tsv --datasets data/olink_overlap_test.csv data/somascan_overlap_test.csv --output data/filtered_ppi_network.tsv
+
 # feature importance analysis
 python scripts/feature_importance_analysis.py \
     --importance_a_to_b data/somascan_overlap_test_importance_vae.csv \
@@ -71,21 +74,52 @@ python scripts/feature_importance_analysis.py \
     --network_type directed \
     --network_layout spring \
     --threshold_method absolute_importance \
-    --ppi_reference data/9606.protein.links.v12.0_converted.tsv \
+    --ppi_reference data/filtered_ppi_network.tsv \
+    --threshold_params 0.03 \
     --threshold_params 0.005477
 
 python scripts/feature_importance_analysis_correlation.py \
     --truth_a data/olink_overlap_test.csv \
+    --truth_b data/somascan_overlap_test.csv \
     --platform_a_name "Olink" \
     --platform_b_name "SomaScan" \
-    --ppi_reference data/9606.protein.links.v12.0_converted.tsv \
+    --ppi_reference data/filtered_ppi_network.tsv \
     --output_dir output_comparisions_network_correlation
+
+
 
 # TARGET DENSITY RECOMMENDATION (density 0.0366):
 #     Best threshold: --threshold_params 0.005477
 #     Achieved density: 0.0351 (diff: 0.0015)
 #     Network size: 79,301 edges, 2,125 nodes
     
+
+
+#   Generated 6 recommendations
+#   → For absolute importance thresholding, use: --threshold_method absolute_importance --threshold_params <threshold>
+#     moderate_density: --threshold_params 0.004296
+#     target_edges: --threshold_params 0.011352
+#     elbow_method: --threshold_params 0.001275
+#     edge_saturation: --threshold_params 0.030000
+#     node_plateau: --threshold_params 0.001000
+#     target_density: --threshold_params 0.004296
+
+#   → EDGE SATURATION RECOMMENDATION (AUTOMATIC DEFAULT):
+#     Recommended threshold: --threshold_params 0.030000
+#     Edge saturation point: 176 edges ≤ 117 nodes (ratio: 1.504)
+#     Network density: 0.0259
+
+#   → TARGET DENSITY RECOMMENDATION (density 0.1120):
+#     Best threshold: --threshold_params 0.004296
+#     Achieved density: 0.0771 (diff: 0.0349)
+#     Network size: 174,203 edges, 2,126 nodes
+
+#   → NODE PLATEAU THRESHOLD:
+#     Threshold: --threshold_params 0.001000
+#     Node count plateau reached (~99% of max nodes: 2126)
+
+
+
 
 # confidence analysis
 python scripts/confidence_analysis.py \
@@ -143,11 +177,11 @@ python scripts/compare_result_oneplatform.py \
     --method2_name "WNN" \
     --method3_name "KNN" \
     --method4_name "Permuted" \
-    --platform_a_name "Olink" \
+    --platform_a_name "S->O" \
     --transpose \
     --output_dir outputs_comparisons_vae_vs_rest_NC_ARIC \
     --phenotype_file data/ARIC/phenotypes/visit5/derive52.csv \
-    --binary_pheno LOOPDIUMDCODE51 CHOLMDCODE52 DIABTS55 \
+    --binary_pheno LOOPDIUMDCODE51 DIABTS55 CHOLMDCODE52 \
     --continuous_pheno HDLSIU51 BMI51 LDL51 \
     --gender_col GENDER \
     --age_col V5AGE52
