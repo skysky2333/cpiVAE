@@ -75,8 +75,8 @@ python scripts/feature_importance_analysis.py \
     --network_layout spring \
     --threshold_method absolute_importance \
     --ppi_reference data/filtered_ppi_network.tsv \
-    --threshold_params 0.03 \
     --threshold_params 0.005477
+    --threshold_params 0.03 \
 
 python scripts/feature_importance_analysis_correlation.py \
     --truth_a data/olink_overlap_test.csv \

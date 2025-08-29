@@ -34,6 +34,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib_venn import venn2, venn2_circles
 import seaborn as sns
 import yaml
 from datetime import datetime
@@ -2918,13 +2919,17 @@ class CorrelationNetworkAnalyzer:
         enrichment_data = []
         enrichment_significance = []
         
-        for i, comparison_name in enumerate(comparison_names):
-            if has_a_to_b and i == 0:
-                enrichment = data.ppi_comparison_a_to_b.get('enrichment_analysis', {})
-            elif has_b_to_a and ((i == 1 and has_a_to_b) or (i == 0 and not has_a_to_b)):
-                enrichment = data.ppi_comparison_b_to_a.get('enrichment_analysis', {})
-            else:
-                enrichment = {}
+        # Build comparison data mapping
+        comparisons_data = []
+        if has_a_to_b:
+            comparisons_data.append((f"{data.platform_a_name} → {data.platform_b_name}", 
+                                    data.ppi_comparison_a_to_b))
+        if has_b_to_a:
+            comparisons_data.append((f"{data.platform_b_name} → {data.platform_a_name}", 
+                                    data.ppi_comparison_b_to_a))
+        
+        for comp_name, comp_data in comparisons_data:
+            enrichment = comp_data.get('enrichment_analysis', {}) if comp_data else {}
             
             if enrichment and 'hypergeometric_p_value' in enrichment:
                 p_value = enrichment['hypergeometric_p_value']
@@ -2956,10 +2961,7 @@ class CorrelationNetworkAnalyzer:
                        ha='center', va='bottom', rotation=45, fontsize=9)
         
         # Plot 5 & 6: Edge overlap Venn-like visualization
-        for plot_idx, (comparison_name, comparison_data) in enumerate([(comparison_names[i], 
-                                                                        data.ppi_comparison_a_to_b if has_a_to_b and i == 0 
-                                                                        else data.ppi_comparison_b_to_a) 
-                                                                       for i in range(len(comparison_names))]):
+        for plot_idx, (comparison_name, comparison_data) in enumerate(comparisons_data):
             if plot_idx >= 2:  # Only plot first 2 comparisons
                 break
                 
@@ -2971,25 +2973,38 @@ class CorrelationNetworkAnalyzer:
             ppi_only = overlap['ppi_only']
             intersection = overlap['intersection']
             
-            # Create a simple bar chart representation of Venn diagram
-            categories = ['Importance\nOnly', 'Both\nNetworks', 'PPI\nOnly']
-            values = [importance_only, intersection, ppi_only]
-            colors_venn = [comparison_colors[plot_idx], COLORS['success'], COLORS['info']]
+            # Create Venn diagram
+            venn = venn2(subsets=(importance_only, ppi_only, intersection),
+                        set_labels=('Importance Network', 'PPI Network'),
+                        ax=ax)
             
-            bars = ax.bar(categories, values, alpha=0.7, color=colors_venn)
+            # Customize colors
+            if venn.get_patch_by_id('10'):  # Importance only
+                venn.get_patch_by_id('10').set_color(comparison_colors[plot_idx])
+                venn.get_patch_by_id('10').set_alpha(0.7)
+            if venn.get_patch_by_id('01'):  # PPI only
+                venn.get_patch_by_id('01').set_color(COLORS['info'])
+                venn.get_patch_by_id('01').set_alpha(0.7)
+            if venn.get_patch_by_id('11'):  # Intersection
+                venn.get_patch_by_id('11').set_color(COLORS['success'])
+                venn.get_patch_by_id('11').set_alpha(0.7)
             
-            # Add value labels on bars
-            for bar, value in zip(bars, values):
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height + max(values) * 0.01,
-                       str(value), ha='center', va='bottom', fontweight='bold')
+            # Add edge styling to circles
+            venn2_circles(subsets=(importance_only, ppi_only, intersection), ax=ax, linewidth=1.5, color='gray')
             
-            ax.set_ylabel('Number of Edges')
-            ax.set_title(f'{comparison_name}\nEdge Distribution')
-            ax.tick_params(axis='x', rotation=45)
+            # Calculate percentages for labels
+            total = importance_only + ppi_only + intersection
+            if total > 0:
+                for subset_id, value in [('10', importance_only), ('01', ppi_only), ('11', intersection)]:
+                    label = venn.get_label_by_id(subset_id)
+                    if label:
+                        pct = (value / total) * 100
+                        label.set_text(f'{value}\n({pct:.1f}%)')
+            
+            ax.set_title(f'{comparison_name}\nEdge Overlap')
         
         # Hide unused subplot if only one comparison
-        if len(comparison_names) == 1:
+        if len(comparisons_data) == 1:
             axes[1, 2].set_visible(False)
         
         plt.tight_layout()
@@ -3463,16 +3478,9 @@ class CorrelationNetworkAnalyzer:
                 ax.plot(recall_pct, precision_pct, 'o-', 
                        color=COLORS['primary'], linewidth=2, markersize=6, alpha=0.8)
                 
-                # Set adaptive axis limits
-                max_precision = max(precision_pct) if precision_pct else 0.01
-                max_recall = max(recall_pct) if recall_pct else 0.01
-                
-                # Add 20% padding to the limits
-                precision_limit = max_precision * 1.2
-                recall_limit = max_recall * 1.2
-                
-                ax.set_xlim(0, recall_limit)
-                ax.set_ylim(0, precision_limit)
+                # Set fixed axis limits to 0-100% for consistency and comparability
+                ax.set_xlim(0, 100)
+                ax.set_ylim(0, 100)
                 
                 # Format axes as percentages
                 ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.2f}%'))
