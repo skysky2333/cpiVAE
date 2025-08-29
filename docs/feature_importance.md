@@ -100,26 +100,6 @@ python scripts/feature_importance_analysis.py \
     --output_dir importance_analysis_results
 ```
 
-### Complete Analysis with All Features
-
-```bash
-python scripts/feature_importance_analysis.py \
-    --importance_a_to_b importance_a_to_b.csv \
-    --importance_b_to_a importance_b_to_a.csv \
-    --truth_a data/truth_platform_a.csv \
-    --truth_b data/truth_platform_b.csv \
-    --imp_a_m1 data/imputed_a_method1.csv \
-    --imp_b_m1 data/imputed_b_method1.csv \
-    --feature_mapping data/feature_mapping.csv \
-    --platform_a_name "Olink" \
-    --platform_b_name "SomaScan" \
-    --threshold_method absolute_importance \
-    --threshold_params 0.005 \
-    --ppi_reference data/string_ppi.txt \
-    --target_density 0.05 \
-    --output_dir importance_analysis_results
-```
-
 ## Command Line Arguments
 
 ### Required Arguments
@@ -141,7 +121,7 @@ python scripts/feature_importance_analysis.py \
 - `--threshold_method`: Thresholding method (`self_importance_ratio` or `absolute_importance`)
 - `--threshold_params`: Threshold parameter value (auto-determined if not provided)
 - `--network_type`: Network type (`directed` or `undirected`)
-- `--target_density`: Target network density for recommendations (default: 0.0366)
+- `--target_density`: Target network density for recommendations
 
 ### PPI Validation Arguments
 
@@ -188,39 +168,6 @@ Tab-delimited format with protein interaction data:
 protein1	protein2	combined_score
 APOE	LDLR	850
 LDLR	PCSK9	650
-```
-
-## Output Structure
-
-The analysis generates comprehensive results organized in subdirectories:
-
-```
-importance_analysis_results/
-├── figures/
-│   ├── rank_consistency_overview_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── rank_distribution_analysis_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── importance_matrix_heatmaps_clustered_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── overlapping_features_analysis_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── feature_specialization_analysis_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── self_feature_importance_analysis_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── self_importance_vs_performance_correlation_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── importance_network_*_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── network_topology_analysis_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── network_hub_analysis_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── ppi_network_comparison_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── ppi_validation_networks_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── threshold_analysis_YYYYMMDD_HHMMSS.pdf/.png
-│   ├── threshold_recommendations_YYYYMMDD_HHMMSS.pdf/.png
-│   └── threshold_pr_curves_YYYYMMDD_HHMMSS.pdf/.png
-├── data/
-│   └── [processed analysis data]
-├── networks/
-│   ├── Platform_A_to_Platform_B_edges.tsv
-│   ├── Platform_A_to_Platform_B_nodes.tsv
-│   ├── Platform_A_to_Platform_B_network.graphml
-│   └── network_summary.yaml
-└── logs/
-    └── analysis_summary_YYYYMMDD_HHMMSS.yaml
 ```
 
 ## Network Construction Methods

@@ -38,7 +38,7 @@ python scripts/compare_result.py --truth_a TRUTH_A --truth_b TRUTH_B --imp_a_m1 
 - `--dpi`: Figure resolution (default: 300)
 - `--save_data`: Save processed data matrices
 
-## Analysis Components
+## Analysis
 
 ### 1. Overall Performance Analysis
 
@@ -48,11 +48,6 @@ python scripts/compare_result.py --truth_a TRUTH_A --truth_b TRUTH_B --imp_a_m1 
 - **Spearman Correlation**: Rank-based correlation
 - **RMSE**: Root mean squared error
 - **MAE**: Mean absolute error
-
-**Visualizations:**
-- Bar plots comparing methods across metrics
-- Statistical significance testing between methods
-- Performance ranking and confidence intervals
 
 ### 2. Feature-wise Analysis
 
@@ -111,7 +106,7 @@ python scripts/compare_result.py --truth_a TRUTH_A --truth_b TRUTH_B --imp_a_m1 
 
 ## Statistical Testing
 
-### Significance Tests Performed
+### Significance Tests
 
 1. **Paired t-tests**: Between methods on same samples
 2. **Wilcoxon signed-rank**: Non-parametric method comparison
@@ -131,36 +126,6 @@ python scripts/compare_result.py --truth_a TRUTH_A --truth_b TRUTH_B --imp_a_m1 
 - **Eta-squared**: Proportion of variance explained
 - **Confidence intervals**: 95% CI for all major metrics
 
-## Output Structure
-
-```
-outputs_comparison/
-├── figures/
-│   ├── overall_performance_summary.png
-│   ├── feature_wise_correlations.png
-│   ├── sample_wise_correlations.png
-│   ├── cross_platform_scatter.png
-│   ├── distribution_comparison.png
-│   ├── pca_analysis.png
-│   ├── umap_embedding.png
-│   └── ...
-├── metrics/
-│   ├── overall_performance.csv
-│   ├── feature_wise_metrics.csv
-│   ├── sample_wise_metrics.csv
-│   ├── cross_platform_metrics.csv
-│   ├── distribution_tests.csv
-│   ├── statistical_comparisons.csv
-│   └── ...
-├── data/
-│   ├── processed_truth_data.csv
-│   ├── processed_imputed_data.csv
-│   └── analysis_metadata.json
-└── summary/
-    ├── executive_summary.txt
-    ├── method_comparison_report.html
-    └── statistical_test_results.txt
-```
 
 ## Examples
 

@@ -84,26 +84,6 @@ Sample002,Control
 Sample003,Disease
 ```
 
-## Output Structure
-
-The analysis generates comprehensive results organized in subdirectories:
-
-```
-latent_analysis_output/
-├── figures/
-│   ├── latent_01_structure_analysis.pdf/.png
-│   ├── latent_02_platform_alignment.pdf/.png
-│   ├── latent_03_dimension_analysis.pdf/.png
-│   ├── latent_04_traversal_dim1.pdf/.png
-│   ├── latent_04_traversal_dim2.pdf/.png
-│   ├── latent_04_traversal_dim3.pdf/.png
-│   └── latent_05_interpolation_analysis.pdf/.png
-├── data/
-│   └── [processed data files]
-└── logs/
-    └── analysis_summary_YYYYMMDD_HHMMSS.txt
-```
-
 
 ## Dependencies
 

@@ -23,7 +23,7 @@ python scripts/run_knn_comparison.py --platform_a PLATFORM_A_FILE --platform_b P
 - `--kernel`: Weighting function (`uniform`, `distance`, `gaussian`, `exponential`, `tricube`)
 - `--cv_folds`: Cross-validation folds for parameter optimization
 
-#### Algorithm Details
+#### Details
 1. **Data Preprocessing**: Optional log transformation and standardization
 2. **Parameter Search**: Grid search over k values and kernel functions
 3. **Cross-Validation**: k-fold CV for robust parameter selection
@@ -40,12 +40,6 @@ python scripts/run_knn_comparison.py \
     --kernel gaussian \
     --output_dir outputs_knn
 ```
-
-#### Output Files
-- `best_params.json`: Optimal parameters from grid search
-- `cv_results.csv`: Cross-validation performance for all parameter combinations
-- `{input_file}_cross_imputed_{target}.csv`: Imputed data
-- `imputation_report_best.txt`: Performance metrics and summary
 
 ---
 
@@ -68,17 +62,6 @@ python scripts/wnn_baseline.py --platform_a PLATFORM_A_FILE --platform_b PLATFOR
 - `--n_components`: PCA components for dimensionality reduction (default: 50)
 - `--sigma`: Bandwidth parameter for weight computation (default: 1.0)
 
-#### Algorithm Details
-1. **Dimensionality Reduction**: PCA on both platforms
-2. **Neighbor Graph**: Construct k-nearest neighbor graphs
-3. **Weight Computation**: Jaccard similarity-based bandwidth estimation
-4. **Graph Integration**: Weighted combination of platform-specific graphs  
-5. **Imputation**: Weighted averaging using integrated neighborhood structure
-
-#### Key Features
-- **Bandwidth Adaptation**: Automatic bandwidth selection based on local neighborhood density
-- **Graph Integration**: Sophisticated weighting of cross-platform neighborhoods
-- **Sparse Computation**: Efficient handling of large datasets using sparse matrices
 
 #### Example
 ```bash
@@ -90,11 +73,5 @@ python scripts/wnn_baseline.py \
     --impute_target a \
     --output_dir outputs_wnn
 ```
-
-#### Output Files
-- `{input_file}_cross_imputed_{target}.csv`: Imputed data
-- `imputation_metrics.json`: Performance statistics
-- `wnn_parameters.json`: Algorithm parameters used
-- `bandwidth_statistics.txt`: Bandwidth computation summary
 
 ---

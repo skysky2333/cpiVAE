@@ -56,23 +56,6 @@ python scripts/qc.py --data_file DATA_FILE [OPTIONS]
 }
 ```
 
-### Output Files
-
-```
-outputs_qc/
-├── checkpoints
-├── top_anomalous_samples
-├── reconstruction_error.png
-├── filted_data_qc_passed.csv
-├── hparams.yaml
-├── latent_space_qc.png
-├── qc_joint_distribution.png
-├── qc_overview.png
-├── poor_quality_samples.cvs
-├── qc_results.cvs
-└── reconstruction_space_qc.png
-```
-
 ### Example
 
 ```bash
