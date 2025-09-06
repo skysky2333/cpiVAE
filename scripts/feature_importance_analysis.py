@@ -1166,7 +1166,8 @@ class ImportanceMatrixAnalyzer:
         
         elif threshold_type == "absolute_importance":
             # Use exponential range from 0.001 to 0.03 for better threshold coverage
-            thresholds_abs = np.logspace(np.log10(0.001), np.log10(0.03), num=15)
+            # Also include 0 for no-threshold case
+            thresholds_abs = np.concatenate([[0.0], np.logspace(np.log10(0.001), np.log10(0.03), num=15)])
             
             for threshold in thresholds_abs:
                 edge_count = 0
@@ -1382,7 +1383,7 @@ class ImportanceMatrixAnalyzer:
     
     def load_ppi_reference(self, ppi_file_path: str, symbol1_col: str = "symbol1", 
                           symbol2_col: str = "symbol2", confidence_col: str = None,
-                          confidence_threshold: float = 0.0) -> 'nx.Graph':
+                          confidence_threshold: float = 0.0, physical_col: str = "physical") -> 'nx.Graph':
         """
         Load protein-protein interaction (PPI) reference network from file.
         
@@ -1395,6 +1396,7 @@ class ImportanceMatrixAnalyzer:
             symbol2_col: Column name for second protein symbol
             confidence_col: Optional column name for confidence scores
             confidence_threshold: Minimum confidence threshold for interactions
+            physical_col: Column name for physical interaction indicator (binary 0/1)
             
         Returns:
             NetworkX undirected graph with PPI interactions
@@ -1420,9 +1422,16 @@ class ImportanceMatrixAnalyzer:
             elif confidence_col:
                 print(f"Warning: Confidence column '{confidence_col}' not found in PPI file")
             
+            # Check if physical column exists
+            has_physical = physical_col in ppi_df.columns
+            if has_physical:
+                n_physical = ppi_df[physical_col].sum() if physical_col in ppi_df.columns else 0
+                print(f"  Found physical interaction column: {n_physical}/{len(ppi_df)} physical interactions")
+            
             G = nx.Graph()
             
             edges_added = 0
+            physical_edges = 0
             for _, row in ppi_df.iterrows():
                 protein1 = str(row[symbol1_col]).strip()
                 protein2 = str(row[symbol2_col]).strip()
@@ -1436,20 +1445,30 @@ class ImportanceMatrixAnalyzer:
                 if confidence_col and confidence_col in ppi_df.columns:
                     edge_attrs['confidence'] = row[confidence_col]
                 
+                # Store physical interaction status
+                if has_physical:
+                    edge_attrs['physical'] = int(row[physical_col]) if not pd.isna(row[physical_col]) else 0
+                    if edge_attrs['physical'] == 1:
+                        physical_edges += 1
+                
                 for col in ppi_df.columns:
-                    if col not in [symbol1_col, symbol2_col, confidence_col]:
+                    if col not in [symbol1_col, symbol2_col, confidence_col, physical_col]:
                         edge_attrs[col] = row[col]
                 
                 G.add_edge(protein1, protein2, **edge_attrs)
                 edges_added += 1
             
             print(f"  Created PPI reference network: {len(G.nodes())} nodes, {len(G.edges())} edges")
+            if has_physical:
+                print(f"  Physical interactions: {physical_edges}/{edges_added} ({100*physical_edges/edges_added:.1f}%)")
             
             G.graph['source_file'] = ppi_file_path
             G.graph['symbol1_col'] = symbol1_col
             G.graph['symbol2_col'] = symbol2_col
             G.graph['confidence_col'] = confidence_col
             G.graph['confidence_threshold'] = confidence_threshold
+            G.graph['physical_col'] = physical_col
+            G.graph['has_physical'] = has_physical
             G.graph['original_interactions'] = len(ppi_df)
             
             return G
@@ -1656,6 +1675,894 @@ class ImportanceMatrixAnalyzer:
         print(f"    PPI validation: {comparison['ppi_validation']['count']} ({comparison['ppi_validation']['fraction_of_ppi_edges']:.1%} of PPI edges)")
         
         return comparison
+    
+    def find_network_cliques(self, network: 'nx.Graph', min_size: int = 2, max_size: int = None) -> Dict:
+        """
+        Find all maximal cliques in the network and organize them by size.
+        
+        A k-clique is a set of k vertices where all C(k,2) = k(k-1)/2 edges exist.
+        This method finds all maximal cliques (cliques not contained in larger cliques).
+        
+        Args:
+            network: NetworkX graph to analyze
+            min_size: Minimum clique size to report (default 2 for edges)
+            max_size: Maximum clique size to report (None for no limit)
+            
+        Returns:
+            Dictionary with clique analysis results
+        """
+        if not NETWORKX_AVAILABLE or network is None or len(network.nodes()) == 0:
+            return {}
+            
+        print(f"  Finding maximal cliques in network...")
+        
+        # Convert to undirected if needed (cliques only make sense for undirected graphs)
+        if network.is_directed():
+            undirected_network = network.to_undirected()
+            print(f"    Converting directed graph to undirected for clique analysis")
+        else:
+            undirected_network = network
+        
+        # Find all maximal cliques using NetworkX's algorithm
+        all_cliques = list(nx.find_cliques(undirected_network))
+        
+        # Organize cliques by size
+        cliques_by_size = {}
+        for clique in all_cliques:
+            size = len(clique)
+            if size >= min_size and (max_size is None or size <= max_size):
+                if size not in cliques_by_size:
+                    cliques_by_size[size] = []
+                cliques_by_size[size].append(sorted(clique))
+        
+        # Compute statistics
+        clique_stats = {
+            'total_maximal_cliques': len(all_cliques),
+            'cliques_by_size': cliques_by_size,
+            'size_distribution': {size: len(cliques) for size, cliques in cliques_by_size.items()},
+            'largest_clique_size': max(cliques_by_size.keys()) if cliques_by_size else 0,
+            'node_clique_membership': {}
+        }
+        
+        # Track which nodes belong to which cliques
+        node_memberships = {}
+        for size, cliques in cliques_by_size.items():
+            for clique_idx, clique in enumerate(cliques):
+                for node in clique:
+                    if node not in node_memberships:
+                        node_memberships[node] = []
+                    node_memberships[node].append((size, clique_idx))
+        
+        clique_stats['node_clique_membership'] = node_memberships
+        
+        # Count nodes in multiple cliques
+        multi_clique_nodes = {node: len(memberships) for node, memberships in node_memberships.items() if len(memberships) > 1}
+        clique_stats['nodes_in_multiple_cliques'] = len(multi_clique_nodes)
+        clique_stats['max_clique_memberships'] = max(multi_clique_nodes.values()) if multi_clique_nodes else 0
+        
+        print(f"    Found {len(all_cliques)} maximal cliques")
+        print(f"    Largest clique size: {clique_stats['largest_clique_size']}")
+        print(f"    Clique size distribution: {clique_stats['size_distribution']}")
+        
+        return clique_stats
+    
+    def find_largest_novel_clique(self, network: 'nx.Graph', ppi_network: 'nx.Graph') -> List:
+        """
+        Find the largest maximal clique that has no edge overlap with PPI reference.
+        
+        Args:
+            network: Importance network to analyze
+            ppi_network: Reference PPI network
+            
+        Returns:
+            List of nodes in the largest novel clique (empty list if none found)
+        """
+        if not NETWORKX_AVAILABLE or network is None or len(network.nodes()) == 0:
+            return []
+        
+        # Convert to undirected if needed
+        if network.is_directed():
+            network_undirected = network.to_undirected()
+        else:
+            network_undirected = network
+        
+        # Get PPI edges as set for fast lookup
+        ppi_edges_set = set()
+        if ppi_network is not None:
+            for u, v in ppi_network.edges():
+                ppi_edges_set.add(tuple(sorted([u, v])))
+        
+        # Find all maximal cliques
+        all_cliques = list(nx.find_cliques(network_undirected))
+        
+        # Filter cliques with no PPI overlap
+        novel_cliques = []
+        for clique in all_cliques:
+            # Check all edges in this clique
+            has_ppi_edge = False
+            for i in range(len(clique)):
+                for j in range(i + 1, len(clique)):
+                    edge = tuple(sorted([clique[i], clique[j]]))
+                    if edge in ppi_edges_set:
+                        has_ppi_edge = True
+                        break
+                if has_ppi_edge:
+                    break
+            
+            # If no PPI edges found, this is a novel clique
+            if not has_ppi_edge:
+                novel_cliques.append(clique)
+        
+        # Return the largest novel clique
+        if novel_cliques:
+            largest_novel = max(novel_cliques, key=len)
+            print(f"  Found {len(novel_cliques)} novel cliques (no PPI overlap)")
+            print(f"  Largest novel clique has {len(largest_novel)} nodes")
+            return sorted(largest_novel)
+        else:
+            print(f"  No novel cliques found (all cliques have PPI edges)")
+            return []
+    
+    def analyze_clique_ppi_overlap(self, network: 'nx.Graph', ppi_network: 'nx.Graph', clique_stats: Dict) -> Dict:
+        """
+        Analyze how cliques in the importance network overlap with PPI reference.
+        
+        Args:
+            network: Importance network with cliques
+            ppi_network: Reference PPI network
+            clique_stats: Results from find_network_cliques
+            
+        Returns:
+            Dictionary with PPI overlap analysis for cliques
+        """
+        if not NETWORKX_AVAILABLE or not clique_stats or ppi_network is None:
+            return {}
+        
+        print(f"  Analyzing clique overlap with PPI reference...")
+        
+        overlap_stats = {
+            'clique_ppi_validation': {},
+            'ppi_enriched_cliques': [],
+            'novel_cliques': []
+        }
+        
+        # Get PPI edges as set for fast lookup
+        ppi_edges = set()
+        for u, v in ppi_network.edges():
+            ppi_edges.add(tuple(sorted([u, v])))
+        
+        # Analyze each clique size
+        for size, cliques in clique_stats.get('cliques_by_size', {}).items():
+            size_stats = {
+                'total_cliques': len(cliques),
+                'fully_validated': 0,
+                'partially_validated': 0,
+                'novel': 0,
+                'avg_ppi_overlap': 0
+            }
+            
+            overlap_scores = []
+            
+            for clique in cliques:
+                # Count edges in this clique that are in PPI
+                clique_edges = set()
+                for i in range(len(clique)):
+                    for j in range(i + 1, len(clique)):
+                        edge = tuple(sorted([clique[i], clique[j]]))
+                        clique_edges.add(edge)
+                
+                ppi_edges_in_clique = clique_edges & ppi_edges
+                overlap_ratio = len(ppi_edges_in_clique) / len(clique_edges) if clique_edges else 0
+                overlap_scores.append(overlap_ratio)
+                
+                # Categorize clique
+                if overlap_ratio == 1.0:
+                    size_stats['fully_validated'] += 1
+                    overlap_stats['ppi_enriched_cliques'].append({
+                        'size': size,
+                        'members': clique,
+                        'ppi_overlap': overlap_ratio
+                    })
+                elif overlap_ratio > 0:
+                    size_stats['partially_validated'] += 1
+                else:
+                    size_stats['novel'] += 1
+                    if size >= 3:  # Only track novel cliques of size 3+
+                        overlap_stats['novel_cliques'].append({
+                            'size': size,
+                            'members': clique
+                        })
+            
+            size_stats['avg_ppi_overlap'] = np.mean(overlap_scores) if overlap_scores else 0
+            overlap_stats['clique_ppi_validation'][size] = size_stats
+        
+        print(f"    PPI-validated cliques: {len(overlap_stats['ppi_enriched_cliques'])}")
+        print(f"    Novel cliques (size 3+): {len(overlap_stats['novel_cliques'])}")
+        
+        return overlap_stats
+    
+    def find_overlapping_cliques_between_networks(self, network_a: 'nx.Graph', network_b: 'nx.Graph',
+                                                  min_clique_size: int = 3,
+                                                  max_cliques_per_network: int = 5000,
+                                                  max_pairs_to_find: int = 50) -> Dict:
+        """
+        Find and rank overlapping cliques between two networks with optimization for large networks.
+        
+        Compares maximal cliques from network A with maximal cliques from network B,
+        calculating node and edge overlap metrics for each pair. Uses smart filtering
+        to handle networks with millions of cliques efficiently.
+        
+        Args:
+            network_a: First network (e.g., A→B direction)
+            network_b: Second network (e.g., B→A direction)
+            min_clique_size: Minimum clique size to consider (default 3 for triangles+)
+            max_cliques_per_network: Maximum number of largest cliques to analyze per network
+            max_pairs_to_find: Stop after finding this many overlapping pairs (early stopping)
+            
+        Returns:
+            Dictionary containing:
+            - clique_pairs_by_absolute: List of clique pairs sorted by absolute edge overlap
+            - clique_pairs_by_percentage: List of clique pairs sorted by overlap percentage
+            - statistics: Summary statistics about the overlap analysis
+        """
+        if not NETWORKX_AVAILABLE or network_a is None or network_b is None:
+            return {}
+        
+        print("Finding overlapping cliques between networks (optimized)...")
+        print(f"  Parameters: min_size={min_clique_size}, max_cliques={max_cliques_per_network}, max_pairs={max_pairs_to_find}")
+        
+        # Convert to undirected for clique finding
+        if network_a.is_directed():
+            network_a_undirected = network_a.to_undirected()
+        else:
+            network_a_undirected = network_a
+            
+        if network_b.is_directed():
+            network_b_undirected = network_b.to_undirected()
+        else:
+            network_b_undirected = network_b
+        
+        # Find all maximal cliques in both networks
+        print("  Finding cliques in network A...")
+        cliques_a_raw = list(nx.find_cliques(network_a_undirected))
+        print(f"    Found {len(cliques_a_raw)} total cliques")
+        
+        print("  Finding cliques in network B...")
+        cliques_b_raw = list(nx.find_cliques(network_b_undirected))
+        print(f"    Found {len(cliques_b_raw)} total cliques")
+        
+        # Filter by size and sort by size (largest first)
+        cliques_a = [c for c in cliques_a_raw if len(c) >= min_clique_size]
+        cliques_a.sort(key=len, reverse=True)
+        cliques_a = cliques_a[:max_cliques_per_network]
+        
+        cliques_b = [c for c in cliques_b_raw if len(c) >= min_clique_size]
+        cliques_b.sort(key=len, reverse=True)
+        cliques_b = cliques_b[:max_cliques_per_network]
+        
+        print(f"  After filtering (size>={min_clique_size}, top {max_cliques_per_network}):")
+        print(f"    Network A: {len(cliques_a)} cliques (largest: {len(cliques_a[0]) if cliques_a else 0} nodes)")
+        print(f"    Network B: {len(cliques_b)} cliques (largest: {len(cliques_b[0]) if cliques_b else 0} nodes)")
+        
+        if not cliques_a or not cliques_b:
+            return {
+                'clique_pairs_by_absolute': [],
+                'clique_pairs_by_percentage': [],
+                'statistics': {
+                    'n_cliques_a_total': len(cliques_a_raw),
+                    'n_cliques_b_total': len(cliques_b_raw),
+                    'n_cliques_a_filtered': len(cliques_a),
+                    'n_cliques_b_filtered': len(cliques_b),
+                    'n_pairs_analyzed': 0
+                }
+            }
+        
+        # Build node index for network B cliques for faster lookup
+        print("  Building node index for efficient comparison...")
+        node_to_cliques_b = {}
+        for idx, clique in enumerate(cliques_b):
+            for node in clique:
+                if node not in node_to_cliques_b:
+                    node_to_cliques_b[node] = []
+                node_to_cliques_b[node].append(idx)
+        
+        # Analyze clique pairs with smart filtering
+        clique_pairs = []
+        comparisons_made = 0
+        comparisons_skipped = 0
+        
+        print("  Comparing cliques...")
+        for idx_a, clique_a in enumerate(cliques_a):
+            if len(clique_pairs) >= max_pairs_to_find:
+                print(f"    Early stopping: Found {max_pairs_to_find} overlapping pairs")
+                break
+                
+            # Progress indicator
+            if idx_a % 100 == 0 and idx_a > 0:
+                print(f"    Progress: {idx_a}/{len(cliques_a)} cliques from A processed, {len(clique_pairs)} pairs found")
+            
+            # Get edges in clique A
+            edges_a = set()
+            for i in range(len(clique_a)):
+                for j in range(i + 1, len(clique_a)):
+                    edge = tuple(sorted([clique_a[i], clique_a[j]]))
+                    edges_a.add(edge)
+            
+            nodes_a = set(clique_a)
+            
+            # Find potentially overlapping cliques in B using node index
+            candidate_cliques_b = set()
+            for node in nodes_a:
+                if node in node_to_cliques_b:
+                    candidate_cliques_b.update(node_to_cliques_b[node])
+            
+            # Only compare with cliques that share at least 2 nodes (minimum for edge overlap)
+            for idx_b in candidate_cliques_b:
+                clique_b = cliques_b[idx_b]
+                nodes_b = set(clique_b)
+                node_overlap = nodes_a & nodes_b
+                
+                # Skip if less than 2 nodes overlap (no edge overlap possible)
+                if len(node_overlap) < 2:
+                    comparisons_skipped += 1
+                    continue
+                
+                comparisons_made += 1
+                
+                # Get edges in clique B
+                edges_b = set()
+                for i in range(len(clique_b)):
+                    for j in range(i + 1, len(clique_b)):
+                        edge = tuple(sorted([clique_b[i], clique_b[j]]))
+                        edges_b.add(edge)
+                
+                edge_overlap = edges_a & edges_b
+                
+                # Skip if no edge overlap
+                if len(edge_overlap) == 0:
+                    continue
+                
+                # Calculate metrics
+                min_edges = min(len(edges_a), len(edges_b))
+                
+                overlap_info = {
+                    'clique_a': sorted(clique_a),
+                    'clique_b': sorted(clique_b),
+                    'size_a': len(clique_a),
+                    'size_b': len(clique_b),
+                    'nodes_a': nodes_a,
+                    'nodes_b': nodes_b,
+                    'edges_a': edges_a,
+                    'edges_b': edges_b,
+                    'node_overlap': node_overlap,
+                    'edge_overlap': edge_overlap,
+                    'n_nodes_overlap': len(node_overlap),
+                    'n_edges_overlap': len(edge_overlap),
+                    'percentage_overlap': len(edge_overlap) / min_edges if min_edges > 0 else 0,
+                    'jaccard_edges': len(edge_overlap) / len(edges_a | edges_b) if len(edges_a | edges_b) > 0 else 0
+                }
+                
+                clique_pairs.append(overlap_info)
+                
+                # Early stopping if we have enough pairs
+                if len(clique_pairs) >= max_pairs_to_find:
+                    break
+        
+        print(f"  Comparison complete: {comparisons_made} comparisons made, {comparisons_skipped} skipped")
+        print(f"  Found {len(clique_pairs)} overlapping clique pairs")
+        
+        # Sort by different metrics
+        clique_pairs_by_absolute = sorted(clique_pairs, key=lambda x: x['n_edges_overlap'], reverse=True)
+        clique_pairs_by_percentage = sorted(clique_pairs, key=lambda x: x['percentage_overlap'], reverse=True)
+        
+        # Calculate statistics
+        if clique_pairs:
+            avg_node_overlap = np.mean([p['n_nodes_overlap'] for p in clique_pairs])
+            avg_edge_overlap = np.mean([p['n_edges_overlap'] for p in clique_pairs])
+            max_edge_overlap = max(p['n_edges_overlap'] for p in clique_pairs)
+            max_percentage_overlap = max(p['percentage_overlap'] for p in clique_pairs)
+        else:
+            avg_node_overlap = 0
+            avg_edge_overlap = 0
+            max_edge_overlap = 0
+            max_percentage_overlap = 0
+        
+        statistics = {
+            'n_cliques_a_total': len(cliques_a_raw),
+            'n_cliques_b_total': len(cliques_b_raw),
+            'n_cliques_a_filtered': len(cliques_a),
+            'n_cliques_b_filtered': len(cliques_b),
+            'n_pairs_analyzed': len(clique_pairs),
+            'n_comparisons_made': comparisons_made,
+            'n_comparisons_skipped': comparisons_skipped,
+            'avg_node_overlap': avg_node_overlap,
+            'avg_edge_overlap': avg_edge_overlap,
+            'max_edge_overlap': max_edge_overlap,
+            'max_percentage_overlap': max_percentage_overlap
+        }
+        
+        print(f"  Max edge overlap: {max_edge_overlap} edges")
+        print(f"  Max percentage overlap: {max_percentage_overlap:.1%}")
+        
+        return {
+            'clique_pairs_by_absolute': clique_pairs_by_absolute,
+            'clique_pairs_by_percentage': clique_pairs_by_percentage,
+            'statistics': statistics
+        }
+    
+    def plot_shared_cliques_between_directions(self, network_a_to_b: 'nx.Graph', network_b_to_a: 'nx.Graph',
+                                              platform_a_name: str, platform_b_name: str) -> plt.Figure:
+        """
+        Visualize the most overlapping cliques between two network directions.
+        
+        Creates a 2x2 plot showing:
+        - Top row: Two cliques with most absolute edge overlap
+        - Bottom row: Two cliques with highest overlap percentage
+        
+        Args:
+            network_a_to_b: Network for A→B direction
+            network_b_to_a: Network for B→A direction
+            platform_a_name: Name of platform A
+            platform_b_name: Name of platform B
+            
+        Returns:
+            Matplotlib figure with the visualization
+        """
+        if not NETWORKX_AVAILABLE or network_a_to_b is None or network_b_to_a is None:
+            print("Skipping shared cliques visualization - networks not available")
+            return None
+        
+        print(f"Generating shared cliques visualization between directions...")
+        
+        # Find overlapping cliques
+        overlap_data = self.find_overlapping_cliques_between_networks(network_a_to_b, network_b_to_a)
+        
+        if not overlap_data or not overlap_data['clique_pairs_by_absolute']:
+            print("  No overlapping cliques found between networks")
+            # Create empty figure with message
+            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+            ax.text(0.5, 0.5, 'No overlapping cliques found between networks', 
+                   ha='center', va='center', fontsize=16)
+            ax.set_title('Shared Cliques Analysis')
+            ax.axis('off')
+            return fig
+        
+        # Create figure with 2x2 subplots
+        fig, axes = plt.subplots(2, 2, figsize=(20, 20))
+        
+        # Get top cliques by absolute and percentage
+        top_absolute = overlap_data['clique_pairs_by_absolute'][:2]
+        top_percentage = overlap_data['clique_pairs_by_percentage'][:2]
+        
+        # Ensure we have enough cliques to plot
+        cliques_to_plot = []
+        titles = []
+        
+        # Add top absolute overlap cliques
+        for i, clique_pair in enumerate(top_absolute):
+            cliques_to_plot.append(clique_pair)
+            n_edges = clique_pair['n_edges_overlap']
+            n_edges_a = len(clique_pair['edges_a'])
+            n_edges_b = len(clique_pair['edges_b'])
+            titles.append(f"Top {i+1} by Absolute Overlap\n{n_edges} common edges (A:{n_edges_a}, B:{n_edges_b})")
+        
+        # Fill remaining spots if needed
+        while len(cliques_to_plot) < 2:
+            cliques_to_plot.append(None)
+            titles.append("No clique pair available")
+        
+        # Add top percentage overlap cliques
+        for i, clique_pair in enumerate(top_percentage):
+            cliques_to_plot.append(clique_pair)
+            percentage = clique_pair['percentage_overlap'] * 100
+            n_edges = clique_pair['n_edges_overlap']
+            titles.append(f"Top {i+1} by Percentage Overlap\n{percentage:.1f}% overlap ({n_edges} edges)")
+        
+        # Fill remaining spots if needed
+        while len(cliques_to_plot) < 4:
+            cliques_to_plot.append(None)
+            titles.append("No clique pair available")
+        
+        # Plot each clique pair
+        for idx, (ax, clique_pair, title) in enumerate(zip(axes.flat, cliques_to_plot, titles)):
+            row = idx // 2
+            col = idx % 2
+            
+            if clique_pair is None:
+                ax.text(0.5, 0.5, 'No clique pair available', ha='center', va='center')
+                ax.set_title(title)
+                ax.axis('off')
+                continue
+            
+            # Create a combined graph with both cliques
+            combined_graph = nx.Graph()
+            
+            # Add all nodes from both cliques
+            all_nodes = clique_pair['nodes_a'] | clique_pair['nodes_b']
+            combined_graph.add_nodes_from(all_nodes)
+            
+            # Add all edges from both cliques
+            all_edges = clique_pair['edges_a'] | clique_pair['edges_b']
+            for edge in all_edges:
+                combined_graph.add_edge(edge[0], edge[1])
+            
+            # Use spring layout for better visualization
+            pos = nx.spring_layout(combined_graph, k=2, iterations=50, seed=42)
+            
+            # Determine node colors
+            node_colors = []
+            node_sizes = []
+            for node in combined_graph.nodes():
+                if node in clique_pair['node_overlap']:
+                    # Common nodes - use primary color and larger size
+                    node_colors.append(COLORS['primary'])
+                    node_sizes.append(1000)
+                elif node in clique_pair['nodes_a']:
+                    # Only in A - use secondary color
+                    node_colors.append(COLORS['secondary'])
+                    node_sizes.append(700)
+                else:
+                    # Only in B - use accent color
+                    node_colors.append(COLORS['accent'])
+                    node_sizes.append(700)
+            
+            # Draw nodes
+            nx.draw_networkx_nodes(combined_graph, pos, node_color=node_colors,
+                                 node_size=node_sizes, alpha=0.8, ax=ax)
+            
+            # Draw edges with different styles
+            # First draw non-common edges in gray
+            non_common_edges = all_edges - clique_pair['edge_overlap']
+            if non_common_edges:
+                nx.draw_networkx_edges(combined_graph, pos, edgelist=list(non_common_edges),
+                                     edge_color='lightgray', width=1, alpha=0.5, ax=ax)
+            
+            # Then draw common edges in bold
+            if clique_pair['edge_overlap']:
+                nx.draw_networkx_edges(combined_graph, pos, edgelist=list(clique_pair['edge_overlap']),
+                                     edge_color=COLORS['info'], width=3, alpha=0.9, ax=ax)
+            
+            # Draw labels
+            nx.draw_networkx_labels(combined_graph, pos, font_size=10, font_weight='bold', ax=ax)
+            
+            # Set title with statistics
+            stats_text = (f"Nodes: A={clique_pair['size_a']}, B={clique_pair['size_b']}, "
+                         f"Common={clique_pair['n_nodes_overlap']}")
+            ax.set_title(f"{title}\n{stats_text}", fontsize=12)
+            ax.axis('off')
+            
+            # Add legend for first plot only
+            if idx == 0:
+                from matplotlib.patches import Patch
+                from matplotlib.lines import Line2D
+                legend_elements = [
+                    Patch(facecolor=COLORS['primary'], label='Common nodes'),
+                    Patch(facecolor=COLORS['secondary'], label=f'{platform_a_name}→{platform_b_name} only'),
+                    Patch(facecolor=COLORS['accent'], label=f'{platform_b_name}→{platform_a_name} only'),
+                    Line2D([0], [0], color=COLORS['info'], linewidth=3, label='Common edges'),
+                    Line2D([0], [0], color='lightgray', linewidth=1, label='Non-common edges')
+                ]
+                ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
+        
+        # Add overall title
+        plt.suptitle(f'Shared Cliques Between {platform_a_name}→{platform_b_name} and {platform_b_name}→{platform_a_name}',
+                    fontsize=16, y=1.02)
+        plt.tight_layout()
+        
+        return self.save_figure(fig, "shared_cliques_between_directions")
+    
+    def plot_network_cliques_with_ppi(self, network: 'nx.Graph', ppi_network: 'nx.Graph', 
+                                     title_prefix: str, max_nodes: int = 100) -> plt.Figure:
+        """
+        Visualize network with clique groupings and PPI edge highlighting.
+        
+        Creates a comprehensive visualization showing:
+        - Network colored by maximal clique membership
+        - PPI reference edges highlighted
+        - Clique size distribution
+        - PPI overlap statistics
+        
+        Args:
+            network: Importance network to visualize
+            ppi_network: Reference PPI network for edge highlighting
+            title_prefix: Title prefix for the plots
+            max_nodes: Maximum nodes to visualize
+            
+        Returns:
+            Matplotlib figure with the visualization
+        """
+        if not NETWORKX_AVAILABLE or network is None or len(network.nodes()) == 0:
+            print(f"  Skipping clique visualization for {title_prefix} - no network available")
+            return None
+        
+        print(f"Generating clique visualization for {title_prefix}...")
+        
+        # Find cliques in the network
+        clique_stats = self.find_network_cliques(network)
+        
+        # Analyze PPI overlap if available
+        ppi_overlap = {}
+        if ppi_network is not None:
+            ppi_overlap = self.analyze_clique_ppi_overlap(network, ppi_network, clique_stats)
+        
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 2, figsize=(16, 16))
+        
+        # Convert to undirected if needed for clique finding
+        if network.is_directed():
+            network_undirected = network.to_undirected()
+        else:
+            network_undirected = network
+        
+        # Find the largest novel clique (no PPI overlap) for top-left plot
+        largest_novel_clique = []
+        if ppi_network is not None:
+            largest_novel_clique = self.find_largest_novel_clique(network, ppi_network)
+        
+        # Find the regular largest clique for top-right plot
+        largest_clique = []
+        if clique_stats and 'cliques_by_size' in clique_stats:
+            # Get the largest clique size
+            max_size = clique_stats.get('largest_clique_size', 0)
+            if max_size > 0 and max_size in clique_stats['cliques_by_size']:
+                # Take the first clique of the largest size
+                largest_clique = clique_stats['cliques_by_size'][max_size][0]
+            elif clique_stats['cliques_by_size']:
+                # Fallback to any largest available
+                sizes = sorted(clique_stats['cliques_by_size'].keys(), reverse=True)
+                if sizes:
+                    largest_clique = clique_stats['cliques_by_size'][sizes[0]][0]
+        
+        # Create subgraph for top-left plot (novel clique)
+        if largest_novel_clique:
+            network_viz_novel = network_undirected.subgraph(largest_novel_clique).copy()
+            print(f"  Top-left: Visualizing largest novel clique with {len(largest_novel_clique)} nodes (no PPI overlap)")
+        elif largest_clique:
+            # If no novel clique, fall back to regular largest clique
+            network_viz_novel = network_undirected.subgraph(largest_clique).copy()
+            print(f"  Top-left: No novel cliques found, showing regular largest clique")
+        else:
+            # Fallback to top nodes if no cliques found at all
+            if len(network_undirected.nodes()) > 20:
+                degrees = dict(network_undirected.degree())
+                top_nodes = sorted(degrees.keys(), key=lambda x: degrees[x], reverse=True)[:20]
+                network_viz_novel = network_undirected.subgraph(top_nodes).copy()
+                print(f"  Top-left: No cliques found, showing top 20 nodes by degree")
+            else:
+                network_viz_novel = network_undirected.copy()
+        
+        # Create subgraph for top-right plot (regular largest clique)
+        if largest_clique:
+            network_viz = network_undirected.subgraph(largest_clique).copy()
+            print(f"  Top-right: Visualizing largest clique with {len(largest_clique)} nodes")
+        else:
+            # Fallback to same as left plot if no regular clique
+            network_viz = network_viz_novel.copy()
+        
+        # Use circular layout for novel clique visualization (top-left)
+        if largest_novel_clique and len(largest_novel_clique) > 2:
+            pos_novel = nx.circular_layout(network_viz_novel)
+        else:
+            pos_novel = nx.spring_layout(network_viz_novel, k=2, iterations=100, seed=42)
+        
+        # Use circular layout for regular clique visualization (top-right)
+        if largest_clique and len(largest_clique) > 2:
+            pos = nx.circular_layout(network_viz)
+        else:
+            pos = nx.spring_layout(network_viz, k=2, iterations=100, seed=42)
+        
+        # --- Subplot 1: Largest Novel Clique (No PPI Overlap) ---
+        ax = axes[0, 0]
+        
+        # Color and size for novel clique nodes
+        if largest_novel_clique:
+            clique_size = len(largest_novel_clique)
+            if clique_size == 3:
+                node_color = COLORS['success']
+                size_label = 'Novel Triangle (3-clique)'
+            elif clique_size == 4:
+                node_color = COLORS['alternative_1']
+                size_label = 'Novel 4-clique'
+            elif clique_size >= 5:
+                node_color = COLORS['danger']
+                size_label = f'Novel {clique_size}-clique'
+            else:
+                node_color = COLORS['alternative_2']
+                size_label = f'Novel {clique_size}-clique'
+            
+            node_colors = [node_color] * len(network_viz_novel.nodes())
+            node_sizes = [800] * len(network_viz_novel.nodes())  # Larger nodes for visibility
+        else:
+            node_colors = ['lightgray'] * len(network_viz_novel.nodes())
+            node_sizes = [500] * len(network_viz_novel.nodes())
+            size_label = 'Network subset'
+        
+        # Draw the novel clique
+        nx.draw_networkx_nodes(network_viz_novel, pos_novel, node_color=node_colors, 
+                              node_size=node_sizes, alpha=0.8, ax=ax)
+        nx.draw_networkx_edges(network_viz_novel, pos_novel, alpha=0.5, edge_color='black', width=2, ax=ax)
+        
+        # Always show labels for clique visualization
+        nx.draw_networkx_labels(network_viz_novel, pos_novel, font_size=10, font_weight='bold', ax=ax)
+        
+        ax.set_title(f'{title_prefix}: Largest Novel Clique (No PPI Overlap)\n({size_label}, Members: {", ".join(map(str, list(network_viz_novel.nodes())[:10]))}{"..." if len(network_viz_novel.nodes()) > 10 else ""})')
+        ax.axis('off')
+        
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='lightgray', label='Singleton'),
+            Patch(facecolor=COLORS['alternative_2'], label='2-clique'),
+            Patch(facecolor=COLORS['success'], label='3-clique'),
+            Patch(facecolor=COLORS['alternative_1'], label='4-clique'),
+            Patch(facecolor=COLORS['danger'], label='5+ clique')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right')
+        
+        # --- Subplot 2: Network with PPI edges highlighted (physical vs non-physical) ---
+        ax = axes[0, 1]
+        
+        # Highlight PPI edges if available, distinguishing physical interactions
+        if ppi_network is not None:
+            # Build lookup for PPI edges with physical status
+            ppi_edges_lookup = {}
+            for u, v, data in ppi_network.edges(data=True):
+                edge = tuple(sorted([u, v]))
+                ppi_edges_lookup[edge] = data.get('physical', 0)
+            
+            # Categorize edges in visualization network
+            physical_edges_in_viz = []
+            non_physical_ppi_edges_in_viz = []
+            novel_edges_in_viz = []
+            
+            for u, v in network_viz.edges():
+                edge = tuple(sorted([u, v]))
+                if edge in ppi_edges_lookup:
+                    if ppi_edges_lookup[edge] == 1:
+                        physical_edges_in_viz.append((u, v))
+                    else:
+                        non_physical_ppi_edges_in_viz.append((u, v))
+                else:
+                    novel_edges_in_viz.append((u, v))
+            
+            # Draw edges in order: novel (bottom), non-physical PPI, physical (top)
+            # Draw novel edges in light gray
+            if novel_edges_in_viz:
+                nx.draw_networkx_edges(network_viz, pos, edgelist=novel_edges_in_viz,
+                                      alpha=0.2, edge_color='lightgray', width=0.5, ax=ax)
+            
+            # Draw non-physical PPI edges in red
+            if non_physical_ppi_edges_in_viz:
+                nx.draw_networkx_edges(network_viz, pos, edgelist=non_physical_ppi_edges_in_viz,
+                                      alpha=0.8, edge_color=COLORS['primary'], width=2, ax=ax)
+            
+            # Draw physical PPI edges in blue
+            if physical_edges_in_viz:
+                nx.draw_networkx_edges(network_viz, pos, edgelist=physical_edges_in_viz,
+                                      alpha=0.8, edge_color=COLORS['secondary'], width=2, ax=ax)
+            
+            # Calculate statistics
+            n_ppi = len(physical_edges_in_viz) + len(non_physical_ppi_edges_in_viz)
+            ppi_ratio = n_ppi / len(network_viz.edges()) if network_viz.edges() else 0
+            
+            # Update title with statistics and clique info
+            if largest_clique:
+                clique_size_str = f'{len(largest_clique)}-clique'
+            else:
+                clique_size_str = 'Network subset'
+            title_parts = [f'{title_prefix}: Largest Clique with PPI Overlay ({clique_size_str})']
+            if physical_edges_in_viz or non_physical_ppi_edges_in_viz:
+                title_parts.append(f'Physical: {len(physical_edges_in_viz)}, Non-physical: {len(non_physical_ppi_edges_in_viz)}, Novel: {len(novel_edges_in_viz)}')
+                title_parts.append(f'PPI coverage: {ppi_ratio:.1%}')
+            ax.set_title('\n'.join(title_parts))
+        else:
+            # Draw all edges in gray if no PPI reference
+            nx.draw_networkx_edges(network_viz, pos, alpha=0.1, edge_color='gray', ax=ax)
+            ax.set_title(f'{title_prefix}: Network Structure\n(No PPI reference available)')
+        
+        # Define colors for regular largest clique nodes
+        if largest_clique:
+            clique_size_regular = len(largest_clique)
+            if clique_size_regular == 3:
+                node_color_regular = COLORS['success']
+            elif clique_size_regular == 4:
+                node_color_regular = COLORS['alternative_1']
+            elif clique_size_regular >= 5:
+                node_color_regular = COLORS['danger']
+            else:
+                node_color_regular = COLORS['alternative_2']
+            
+            node_colors_regular = [node_color_regular] * len(network_viz.nodes())
+            node_sizes_regular = [800] * len(network_viz.nodes())
+        else:
+            node_colors_regular = ['lightgray'] * len(network_viz.nodes())
+            node_sizes_regular = [500] * len(network_viz.nodes())
+        
+        # Draw nodes
+        nx.draw_networkx_nodes(network_viz, pos, node_color=node_colors_regular,
+                              node_size=node_sizes_regular, alpha=0.7, ax=ax)
+        
+        # Always show labels for this plot (as requested)
+        nx.draw_networkx_labels(network_viz, pos, font_size=10, font_weight='bold', ax=ax)
+        
+        ax.axis('off')
+        
+        # Add legend for edges
+        if ppi_network is not None:
+            from matplotlib.lines import Line2D
+            edge_legend = [
+                Line2D([0], [0], color=COLORS['secondary'], linewidth=3, label='Physical PPI'),
+                Line2D([0], [0], color=COLORS['primary'], linewidth=3, label='Non-physical PPI'),
+                Line2D([0], [0], color='lightgray', linewidth=1, label='Novel edge')
+            ]
+            ax.legend(handles=edge_legend, loc='upper right')
+        
+        # --- Subplot 3: Clique size distribution ---
+        ax = axes[1, 0]
+        
+        if clique_stats and 'size_distribution' in clique_stats:
+            sizes = list(clique_stats['size_distribution'].keys())
+            counts = list(clique_stats['size_distribution'].values())
+            
+            bars = ax.bar(sizes, counts, color=COLORS['secondary'], alpha=0.7)
+            ax.set_xlabel('Clique Size')
+            ax.set_ylabel('Number of Maximal Cliques')
+            ax.set_title('Maximal Clique Size Distribution')
+            ax.grid(True, alpha=0.3)
+            
+            # Add value labels on bars
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{int(height)}', ha='center', va='bottom')
+            
+            # Set integer x-ticks
+            if sizes:
+                ax.set_xticks(range(min(sizes), max(sizes) + 1))
+        else:
+            ax.text(0.5, 0.5, 'No clique data available', ha='center', va='center')
+        
+        # --- Subplot 4: PPI validation by clique size ---
+        ax = axes[1, 1]
+        
+        if ppi_overlap and 'clique_ppi_validation' in ppi_overlap:
+            validation_data = ppi_overlap['clique_ppi_validation']
+            
+            if validation_data:
+                sizes = sorted(validation_data.keys())
+                fully_validated = [validation_data[s]['fully_validated'] for s in sizes]
+                partially_validated = [validation_data[s]['partially_validated'] for s in sizes]
+                novel = [validation_data[s]['novel'] for s in sizes]
+                
+                x = np.arange(len(sizes))
+                width = 0.25
+                
+                ax.bar(x - width, fully_validated, width, label='Fully in PPI', color=COLORS['success'])
+                ax.bar(x, partially_validated, width, label='Partially in PPI', color=COLORS['warning'])
+                ax.bar(x + width, novel, width, label='Novel', color=COLORS['info'])
+                
+                ax.set_xlabel('Clique Size')
+                ax.set_ylabel('Number of Cliques')
+                ax.set_title('PPI Validation of Cliques by Size')
+                ax.set_xticks(x)
+                ax.set_xticklabels(sizes)
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                
+                # Add average overlap as line plot on secondary axis
+                ax2 = ax.twinx()
+                avg_overlaps = [validation_data[s]['avg_ppi_overlap'] for s in sizes]
+                ax2.plot(x, avg_overlaps, 'k--', marker='o', label='Avg PPI overlap')
+                ax2.set_ylabel('Average PPI Overlap Ratio')
+                ax2.set_ylim([0, 1])
+                ax2.legend(loc='upper right')
+        else:
+            ax.text(0.5, 0.5, 'No PPI validation data available', ha='center', va='center')
+        
+        plt.suptitle(f'Clique Analysis: {title_prefix}', fontsize=16, y=1.02)
+        plt.tight_layout()
+        
+        return self.save_figure(fig, f"network_cliques_{title_prefix.lower().replace(' ', '_').replace('→', '_to_')}")
     
     def save_figure(self, fig: plt.Figure, name: str, **kwargs):
         """
@@ -3727,49 +4634,95 @@ class ImportanceMatrixAnalyzer:
             thresholds = analysis['thresholds']
             ax = axes[col_idx]
             
-            # Compute PPI validation PR curve
-            precision_values, recall_values = self._compute_ppi_pr_curve(
+            # Compute PPI validation PR curve with F1 scores
+            precision_values, recall_values, f1_values = self._compute_ppi_pr_curve(
                 importance_matrix, data.ppi_reference, thresholds)
             
             if len(precision_values) > 0 and len(recall_values) > 0:
                 # Convert to percentages for display
                 precision_pct = [p * 100 for p in precision_values]
                 recall_pct = [r * 100 for r in recall_values]
+                f1_pct = [f * 100 for f in f1_values]
                 
-                # Plot the PR curve using percentage values
-                ax.plot(recall_pct, precision_pct, 'o-', 
-                       color=COLORS['primary'], linewidth=2, markersize=6, alpha=0.8)
+                # Plot the PR curve - separate lines and points to avoid connecting first and last
+                # Plot lines only between threshold points (not including no-threshold)
+                n_thresh = len(thresholds)
+                if n_thresh > 0:
+                    ax.plot(recall_pct[:n_thresh], precision_pct[:n_thresh], '-', 
+                           color=COLORS['primary'], linewidth=2, alpha=0.8)
+                # Plot all points including no-threshold
+                ax.plot(recall_pct, precision_pct, 'o', 
+                       color=COLORS['primary'], markersize=6, alpha=0.8, label='PR Curve')
+                
+                # Create secondary axis for F1 score
+                ax2 = ax.twinx()
+                # Similar approach for F1 curve
+                if n_thresh > 0:
+                    ax2.plot(recall_pct[:n_thresh], f1_pct[:n_thresh], '--', 
+                            color=COLORS['secondary'], linewidth=2, alpha=0.8)
+                ax2.plot(recall_pct, f1_pct, 's', 
+                        color=COLORS['secondary'], markersize=5, alpha=0.8, label='F1 Score')
+                
+                # Find and mark the maximum F1 point
+                max_f1_idx = np.argmax(f1_values)
+                ax.plot(recall_pct[max_f1_idx], precision_pct[max_f1_idx], 'r*', 
+                       markersize=15, label=f'Max F1={f1_pct[max_f1_idx]:.1f}%')
+                ax2.plot(recall_pct[max_f1_idx], f1_pct[max_f1_idx], 'r*', markersize=15)
                 
                 # Set fixed axis limits to 0-100% for consistency and comparability
                 ax.set_xlim(0, 100)
                 ax.set_ylim(0, 100)
+                ax2.set_ylim(0, 100)
                 
                 # Format axes as percentages
-                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.2f}%'))
-                ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.2f}%'))
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
+                ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.1f}%'))
+                ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
                 
                 # Labels and title
                 ax.set_xlabel('Recall (% of PPI edges recovered)')
-                ax.set_ylabel('Precision (% of predicted edges in PPI)')
-                ax.set_title(f'{direction_name}\nNetwork Edge Validation vs PPI Reference')
+                ax.set_ylabel('Precision (% of predicted edges in PPI)', color=COLORS['primary'])
+                ax2.set_ylabel('F1 Score (%)', color=COLORS['secondary'])
+                ax.set_title(f'{direction_name}\nPR Curve with F1 Score')
                 ax.grid(True, alpha=0.3)
                 
-                # Add threshold annotations for key points
-                step_size = max(1, len(thresholds)//6)  # Show ~6 points
-                for i in range(0, len(thresholds), step_size):
-                    if i < len(recall_pct) and i < len(precision_pct):
-                        ax.annotate(f'{thresholds[i]:.3f}', 
+                # Color the y-axis labels to match the lines
+                ax.tick_params(axis='y', labelcolor=COLORS['primary'])
+                ax2.tick_params(axis='y', labelcolor=COLORS['secondary'])
+                
+                # Add threshold annotations for key points including F1
+                extended_thresholds = list(thresholds) + [0.0]
+                step_size = max(1, len(extended_thresholds)//8)  # Show ~8 points
+                for i in range(0, len(extended_thresholds), step_size):
+                    if i < len(recall_pct) and i < len(precision_pct) and i < len(f1_pct):
+                        thresh_val = extended_thresholds[i] if i < len(thresholds) else 0.0
+                        # Pre-format F1 value to avoid f-string issues
+                        f1_str = f'{f1_pct[i]:.1f}'
+                        if thresh_val > 0:
+                            label = f'T={thresh_val:.3f}\nF1={f1_str}%'
+                        else:
+                            label = f'No threshold\nF1={f1_str}%'
+                        ax.annotate(label, 
                                   (recall_pct[i], precision_pct[i]),
                                   xytext=(5, 5), textcoords='offset points',
-                                  fontsize=9, alpha=0.8,
+                                  fontsize=8, alpha=0.8,
                                   bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7))
                 
-                # Add summary statistics text box
+                # Combine legends from both axes
+                lines1, labels1 = ax.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+                
+                # Add summary statistics text box with F1 info
                 total_ppi_edges = len(data.ppi_reference.edges())
                 max_pred_edges = max([analysis['edge_counts'][i] for i in range(len(thresholds))]) if analysis['edge_counts'] else 0
                 max_overlap = max([int(r * total_ppi_edges / 100) for r in recall_pct]) if recall_pct else 0
+                optimal_threshold = extended_thresholds[max_f1_idx] if max_f1_idx < len(extended_thresholds) else 0
                 
-                stats_text = f'Max overlap: {max_overlap:,} edges\nPPI edges: {total_ppi_edges:,}\nMax predicted: {max_pred_edges:,}'
+                stats_text = f'Max F1: {f1_pct[max_f1_idx]:.1f}% @ T={optimal_threshold:.3f}\n'
+                stats_text += f'Max overlap: {max_overlap:,} edges\n'
+                stats_text += f'PPI edges: {total_ppi_edges:,}\n'
+                stats_text += f'Max predicted: {max_pred_edges:,}'
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
                        verticalalignment='top', fontsize=9,
                        bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
@@ -3784,9 +4737,9 @@ class ImportanceMatrixAnalyzer:
     
     def _compute_ppi_pr_curve(self, importance_matrix: pd.DataFrame, 
                              ppi_network: 'nx.Graph', 
-                             thresholds: List[float]) -> Tuple[List[float], List[float]]:
+                             thresholds: List[float]) -> Tuple[List[float], List[float], List[float]]:
         """
-        Compute precision-recall curve for PPI validation across thresholds.
+        Compute precision-recall curve with F1 scores for PPI validation across thresholds.
         
         Args:
             importance_matrix: Feature importance matrix
@@ -3794,10 +4747,10 @@ class ImportanceMatrixAnalyzer:
             thresholds: List of threshold values to test
             
         Returns:
-            Tuple of (precision_values, recall_values)
+            Tuple of (precision_values, recall_values, f1_values)
         """
         if not NETWORKX_AVAILABLE or ppi_network is None:
-            return [], []
+            return [], [], []
         
         # Get all PPI edges as ground truth
         ppi_edges = set()
@@ -3805,12 +4758,16 @@ class ImportanceMatrixAnalyzer:
             ppi_edges.add(tuple(sorted([u, v])))
         
         if len(ppi_edges) == 0:
-            return [], []
+            return [], [], []
         
         precision_values = []
         recall_values = []
+        f1_values = []
         
-        for threshold in thresholds:
+        # Add thresholds in descending order and append 0 for no-threshold case
+        extended_thresholds = list(thresholds) + [0.0]
+        
+        for threshold in extended_thresholds:
             # Build network at this threshold
             pred_edges = set()
             
@@ -3827,22 +4784,35 @@ class ImportanceMatrixAnalyzer:
                         continue
                     
                     importance_value = importance_matrix.loc[input_feature, output_feature]
-                    if importance_value > threshold:
-                        pred_edges.add(tuple(sorted([input_feature, output_feature])))
+                    # For threshold=0, include all edges with any positive importance
+                    if threshold == 0:
+                        if importance_value > 0 or not np.isnan(importance_value):
+                            pred_edges.add(tuple(sorted([input_feature, output_feature])))
+                    else:
+                        if importance_value > threshold:
+                            pred_edges.add(tuple(sorted([input_feature, output_feature])))
             
             if len(pred_edges) == 0:
                 precision = 0.0
                 recall = 0.0
+                f1 = 0.0
             else:
                 # Calculate precision and recall
                 true_positives = len(pred_edges & ppi_edges)
                 precision = true_positives / len(pred_edges)
                 recall = true_positives / len(ppi_edges)
+                
+                # Calculate F1 score
+                if precision + recall > 0:
+                    f1 = 2 * (precision * recall) / (precision + recall)
+                else:
+                    f1 = 0.0
             
             precision_values.append(precision)
             recall_values.append(recall)
+            f1_values.append(f1)
         
-        return precision_values, recall_values
+        return precision_values, recall_values, f1_values
     
     
     def generate_summary_report(self, data: ImportanceAnalysisData):
@@ -4307,6 +5277,38 @@ class ImportanceMatrixAnalyzer:
                     figures['ppi_validation_networks'] = self.plot_ppi_validation_networks(data)
                 except Exception as e:
                     print(f"Error generating PPI validation networks: {e}")
+                
+                # New clique analysis plots (skip if requested)
+                if not network_params.get('skip_cliques', False):
+                    try:
+                        if data.network_a_to_b is not None:
+                            figures['cliques_a_to_b'] = self.plot_network_cliques_with_ppi(
+                                data.network_a_to_b, data.ppi_reference,
+                                f"{data.platform_a_name} → {data.platform_b_name}"
+                            )
+                    except Exception as e:
+                        print(f"Error generating A→B clique analysis: {e}")
+                    
+                    try:
+                        if data.network_b_to_a is not None:
+                            figures['cliques_b_to_a'] = self.plot_network_cliques_with_ppi(
+                                data.network_b_to_a, data.ppi_reference,
+                                f"{data.platform_b_name} → {data.platform_a_name}"
+                            )
+                    except Exception as e:
+                        print(f"Error generating B→A clique analysis: {e}")
+                    
+                    # Add shared cliques visualization
+                    try:
+                        if data.network_a_to_b is not None and data.network_b_to_a is not None:
+                            figures['shared_cliques'] = self.plot_shared_cliques_between_directions(
+                                data.network_a_to_b, data.network_b_to_a,
+                                data.platform_a_name, data.platform_b_name
+                            )
+                    except Exception as e:
+                        print(f"Error generating shared cliques visualization: {e}")
+                else:
+                    print("  Skipping clique analysis as requested (--skip_cliques flag)")
             
             # Threshold analysis plots
             try:
@@ -4554,6 +5556,8 @@ def main():
                        help='Minimum confidence threshold for PPI interactions')
     parser.add_argument('--target_density', type=float, default=0.0366,
                        help='Target network density for threshold recommendations (default: 0.0366)')
+    parser.add_argument('--skip_cliques', action='store_true', default=False,
+                       help='Skip clique analysis to save memory (default: False)')
     
     args = parser.parse_args()
     
@@ -4627,7 +5631,8 @@ def main():
         'network_type': args.network_type,
         'network_layout': args.network_layout,
         'ppi_analysis_enabled': args.ppi_reference is not None,
-        'target_density': args.target_density
+        'target_density': args.target_density,
+        'skip_cliques': args.skip_cliques
     }
     
     # Run full analysis

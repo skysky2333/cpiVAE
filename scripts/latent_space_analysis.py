@@ -23,7 +23,7 @@ import matplotlib.patches as mpatches
 
 # Statistical and ML imports
 from scipy import stats
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import pearsonr, spearmanr, levene
 from scipy.spatial.distance import pdist, squareform
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -1002,6 +1002,253 @@ class LatentSpaceAnalyzer:
         plt.tight_layout()
         return fig
 
+    def generate_variance_statistical_analysis(self, data: LatentAnalysisData):
+        """Figure 6c: Statistical analysis of variance differences between platforms and deltas using top 2 PCs."""
+        print("Generating variance statistical analysis (Figure 6c) using top 2 PCs...")
+        
+        # Use PCA embedding if available, otherwise compute it
+        if data.embeddings is not None and 'pca' in data.embeddings and data.embeddings['pca'] is not None:
+            # Use existing PCA
+            embedding = data.embeddings['pca']['embedding']
+            var_ratio = data.embeddings['pca']['explained_variance']
+            n_samples = len(data.latent_a)
+            embedding_a = embedding[:n_samples]
+            embedding_b = embedding[n_samples:]
+        else:
+            # Compute PCA with 2 components
+            n_samples = len(data.latent_a)
+            combined_latent = pd.concat([data.latent_a, data.latent_b], 
+                                       keys=['A', 'B'], names=['platform', 'sample'])
+            
+            from sklearn.decomposition import PCA
+            pca = PCA(n_components=2, random_state=42)
+            pca_full = pca.fit_transform(combined_latent)
+            
+            embedding_a = pca_full[:n_samples]
+            embedding_b = pca_full[n_samples:]
+            var_ratio = pca.explained_variance_ratio_
+        
+        # Calculate deltas in PCA space
+        delta_pc = embedding_b - embedding_a
+        
+        # Calculate variances for PC1 and PC2
+        var_a_pc1 = np.var(embedding_a[:, 0])
+        var_a_pc2 = np.var(embedding_a[:, 1])
+        var_b_pc1 = np.var(embedding_b[:, 0])
+        var_b_pc2 = np.var(embedding_b[:, 1])
+        var_delta_pc1 = np.var(delta_pc[:, 0])
+        var_delta_pc2 = np.var(delta_pc[:, 1])
+        
+        # Total variance (sum of PC1 and PC2)
+        var_a_total = var_a_pc1 + var_a_pc2
+        var_b_total = var_b_pc1 + var_b_pc2
+        var_delta_total = var_delta_pc1 + var_delta_pc2
+        
+        # Test PC1 and PC2 separately
+        stat_ab_pc1, p_ab_pc1 = levene(embedding_a[:, 0], embedding_b[:, 0])
+        stat_ab_pc2, p_ab_pc2 = levene(embedding_a[:, 1], embedding_b[:, 1])
+        
+        stat_da_pc1, p_da_pc1 = levene(delta_pc[:, 0], embedding_a[:, 0])
+        stat_da_pc2, p_da_pc2 = levene(delta_pc[:, 1], embedding_a[:, 1])
+        
+        stat_db_pc1, p_db_pc1 = levene(delta_pc[:, 0], embedding_b[:, 0])
+        stat_db_pc2, p_db_pc2 = levene(delta_pc[:, 1], embedding_b[:, 1])
+        
+        # Conservative approach: use the maximum p-value (most conservative)
+        # For A vs B: we want to be conservative about claiming similarity
+        p_ab = max(p_ab_pc1, p_ab_pc2)
+        
+        # For Delta comparisons: use minimum p-value (most significant)
+        # We want to be confident that delta has lower variance
+        p_da = min(p_da_pc1, p_da_pc2)
+        p_db = min(p_db_pc1, p_db_pc2)
+        
+        # Helper function for significance markers
+        def get_significance_marker(p_value):
+            if p_value < 0.001:
+                return '***'
+            elif p_value < 0.01:
+                return '**'
+            elif p_value < 0.05:
+                return '*'
+            else:
+                return 'n.s.'
+        
+        # Create square figure with clean layout
+        fig = plt.figure(figsize=(12, 12))
+        gs = GridSpec(2, 2, figure=fig, hspace=0.3, wspace=0.3, height_ratios=[1, 1])
+        
+        fig.suptitle(f'Variance Analysis in PCA Space (Figure 6c)', 
+                    fontsize=16, fontweight='bold')
+        
+        # Panel 1: Total variance comparison with significance markers (square)
+        ax1 = fig.add_subplot(gs[0, 0])
+        
+        categories = ['Platform A', 'Platform B', 'Delta (B-A)']
+        total_vars = [var_a_total, var_b_total, var_delta_total]
+        
+        x = np.arange(len(categories))
+        bars = ax1.bar(x, total_vars, color=[NATURE_COLORS['primary'], 
+                                             NATURE_COLORS['secondary'], 
+                                             NATURE_COLORS['accent']], 
+                      alpha=0.8, edgecolor='black', linewidth=1.5)
+        
+        # Add value labels on bars
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2, height,
+                    f'{height:.2f}', ha='center', va='bottom', fontsize=11)
+        
+        # Add significance markers
+        max_height = max(total_vars)
+        y_offset = max_height * 0.1
+        
+        # A vs B comparison
+        y_line = max(var_a_total, var_b_total) + y_offset
+        ax1.plot([0, 1], [y_line, y_line], 'k-', linewidth=1)
+        ax1.text(0.5, y_line + y_offset*0.1, 
+                get_significance_marker(p_ab),
+                ha='center', va='bottom', fontsize=14, fontweight='bold')
+        
+        # Delta vs A comparison
+        y_line = max(var_delta_total, var_a_total) + y_offset*2
+        ax1.plot([0, 2], [y_line, y_line], 'k-', linewidth=1)
+        ax1.text(1, y_line + y_offset*0.1,
+                get_significance_marker(p_da),
+                ha='center', va='bottom', fontsize=14, fontweight='bold')
+        
+        # Delta vs B comparison
+        y_line = max(var_delta_total, var_b_total) + y_offset*2.5
+        ax1.plot([1, 2], [y_line, y_line], 'k-', linewidth=1)
+        ax1.text(1.5, y_line + y_offset*0.1,
+                get_significance_marker(p_db),
+                ha='center', va='bottom', fontsize=14, fontweight='bold')
+        
+        ax1.set_ylabel('Total Variance (PC1 + PC2)', fontsize=12)
+        ax1.set_title(f'Variance in Top 2 Principal Components', fontsize=14)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(categories, fontsize=12)
+        ax1.set_ylim(0, max(total_vars) * 1.4)
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # Add variance reduction percentages
+        var_reduction_a = (1 - var_delta_total/var_a_total) * 100
+        var_reduction_b = (1 - var_delta_total/var_b_total) * 100
+        ax1.text(0.02, 0.98, f'Δ variance reduction:\n'
+                            f'vs A: {var_reduction_a:.1f}%\n'
+                            f'vs B: {var_reduction_b:.1f}%',
+                transform=ax1.transAxes, fontsize=10, va='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        
+        # Panel 2: Individual PC p-values (new top-right panel)
+        ax2 = fig.add_subplot(gs[0, 1])
+        
+        # Show individual PC test results
+        pc_tests = ['PC1: A vs B', 'PC2: A vs B', 
+                   'PC1: Δ vs A', 'PC2: Δ vs A',
+                   'PC1: Δ vs B', 'PC2: Δ vs B']
+        pc_pvals = [p_ab_pc1, p_ab_pc2, p_da_pc1, p_da_pc2, p_db_pc1, p_db_pc2]
+        
+        y_pos = np.arange(len(pc_tests))
+        colors_bars = ['#e64b35' if 'PC1' in t else '#4dbbd5' for t in pc_tests]
+        
+        bars = ax2.barh(y_pos, pc_pvals, color=colors_bars, alpha=0.7)
+        
+        # Add significance threshold line
+        ax2.axvline(x=0.05, color='black', linestyle='--', linewidth=1, label='α=0.05')
+        
+        # Add p-value labels
+        for i, (bar, pval) in enumerate(zip(bars, pc_pvals)):
+            ax2.text(pval + 0.002, bar.get_y() + bar.get_height()/2, 
+                    f'{pval:.3f}', va='center', fontsize=9)
+        
+        ax2.set_yticks(y_pos)
+        ax2.set_yticklabels(pc_tests, fontsize=10)
+        ax2.set_xlabel('p-value', fontsize=11)
+        ax2.set_title('Individual PC Tests (before combining)', fontsize=12)
+        ax2.set_xlim(0, max(0.15, max(pc_pvals) * 1.2))
+        ax2.legend(loc='upper right', fontsize=9)
+        ax2.grid(True, alpha=0.3, axis='x')
+        
+        # Panel 3: PC-wise variance breakdown (moved to bottom left)
+        ax3 = fig.add_subplot(gs[1, 0])
+        
+        # Create bar plot for PC1 and PC2 variances
+        pc_categories = ['PC1', 'PC2']
+        x_pc = np.arange(len(pc_categories))
+        width = 0.25
+        
+        vars_a_pcs = [var_a_pc1, var_a_pc2]
+        vars_b_pcs = [var_b_pc1, var_b_pc2]
+        vars_delta_pcs = [var_delta_pc1, var_delta_pc2]
+        
+        bars1 = ax3.bar(x_pc - width, vars_a_pcs, width, label='Platform A',
+                       color=NATURE_COLORS['primary'], alpha=0.8)
+        bars2 = ax3.bar(x_pc, vars_b_pcs, width, label='Platform B',
+                       color=NATURE_COLORS['secondary'], alpha=0.8)
+        bars3 = ax3.bar(x_pc + width, vars_delta_pcs, width, label='Delta (B-A)',
+                       color=NATURE_COLORS['accent'], alpha=0.8)
+        
+        # Add value labels on bars
+        for bars in [bars1, bars2, bars3]:
+            for bar in bars:
+                height = bar.get_height()
+                ax3.text(bar.get_x() + bar.get_width()/2, height,
+                        f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+        
+        ax3.set_ylabel('Variance', fontsize=11)
+        ax3.set_title('Variance by Principal Component', fontsize=12)
+        ax3.set_xticks(x_pc)
+        ax3.set_xticklabels(pc_categories, fontsize=11)
+        ax3.legend(loc='upper right', fontsize=10)
+        ax3.grid(True, alpha=0.3, axis='y')
+        
+        # Add variance explained below x-axis
+        for i, pc in enumerate(pc_categories):
+            ax3.text(i, -0.05, f'({var_ratio[i]*100:.1f}% var)', 
+                    ha='center', fontsize=9, color='gray',
+                    transform=ax3.get_xaxis_transform())
+        
+        # Panel 4: Summary statistics
+        ax4 = fig.add_subplot(gs[1, 1])
+        ax4.axis('off')
+        
+        # Create summary text box
+        summary_stats = f"""Statistical Test Results
+━━━━━━━━━━━━━━━━━━━━━
+Conservative p-values:
+• A vs B: p = {p_ab:.4f} {get_significance_marker(p_ab)}
+  (max of PC1={p_ab_pc1:.3f}, PC2={p_ab_pc2:.3f})
+• Δ vs A: p = {p_da:.4f} {get_significance_marker(p_da)}
+  (min of PC1={p_da_pc1:.3f}, PC2={p_da_pc2:.3f})
+• Δ vs B: p = {p_db:.4f} {get_significance_marker(p_db)}
+  (min of PC1={p_db_pc1:.3f}, PC2={p_db_pc2:.3f})
+
+Variance Reduction:
+• Δ has {var_reduction_a:.1f}% less than A
+• Δ has {var_reduction_b:.1f}% less than B
+
+Variance Explained:
+• PC1: {var_ratio[0]*100:.1f}%
+• PC2: {var_ratio[1]*100:.1f}%
+• Total: {sum(var_ratio)*100:.1f}%
+
+Interpretation:
+{'✓' if p_ab > 0.05 else '✗'} Platforms similar variance
+{'✓' if p_da < 0.05 else '✗'} Delta < A variance
+{'✓' if p_db < 0.05 else '✗'} Delta < B variance
+
+Conservative approach used:
+Max p-value for similarity test
+Min p-value for difference tests"""
+        
+        ax4.text(0.1, 0.9, summary_stats, transform=ax4.transAxes,
+                fontsize=9, va='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.2))
+        
+        plt.tight_layout()
+        return fig
+
     def generate_all_figures(self, data: LatentAnalysisData):
         """Generate all latent space analysis figures"""
         print("\nGenerating comprehensive latent space analysis figures...")
@@ -1078,6 +1325,16 @@ class LatentSpaceAnalyzer:
                 generated_figures.append("latent_06b_delta_vs_sample_scale")
         except Exception as e:
             print(f"  Error generating delta vs sample scale (6b): {str(e)}")
+        
+        # Figure 6c: Variance statistical analysis
+        try:
+            fig6c = self.generate_variance_statistical_analysis(data)
+            if fig6c:
+                self.save_figure(fig6c, "latent_06c_variance_statistical_analysis")
+                plt.close(fig6c)
+                generated_figures.append("latent_06c_variance_statistical_analysis")
+        except Exception as e:
+            print(f"  Error generating variance statistical analysis (6c): {str(e)}")
         
         print(f"\nGenerated {len(generated_figures)} latent space figures")
         return generated_figures

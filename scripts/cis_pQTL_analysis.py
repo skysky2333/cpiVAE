@@ -142,16 +142,19 @@ class CispQTLAnalyzer:
         timestamp: Analysis timestamp for file naming
     """
     
-    def __init__(self, output_dir: str = "cis_pqtl_analysis", significance_threshold: float = 0.05):
+    def __init__(self, output_dir: str = "cis_pqtl_analysis", significance_threshold: float = 0.05, 
+                 truth_threshold: float = None):
         """Initialize the cis-pQTL analyzer.
         
         Args:
             output_dir: Directory for saving analysis results
             significance_threshold: P-value threshold for significance
+            truth_threshold: Fixed p-value threshold for truth dataset in PR analysis (defaults to significance_threshold)
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.significance_threshold = significance_threshold
+        self.truth_threshold = truth_threshold if truth_threshold is not None else significance_threshold
         
         (self.output_dir / "figures").mkdir(exist_ok=True)
         (self.output_dir / "data").mkdir(exist_ok=True)
@@ -534,7 +537,8 @@ class CispQTLAnalyzer:
         """Analyze precision-recall curves across significance thresholds.
         
         Evaluates method performance across different p-value thresholds for
-        associations, phenotypes, and variants to generate PR curves.
+        method predictions while keeping truth dataset at a fixed threshold.
+        This properly evaluates how well methods recover true positives at different stringency levels.
         
         Args:
             data: pQTLData object with loaded data
@@ -542,7 +546,7 @@ class CispQTLAnalyzer:
         Returns:
             Dictionary containing PR analysis results for each method and level
         """
-        print("Analyzing precision-recall curves across significance thresholds...")
+        print(f"Analyzing precision-recall curves (truth fixed at p < {self.truth_threshold})...")
         
         thresholds = [5e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 0.01, 0.05, 0.1, 0.2, 0.5]
         
@@ -555,6 +559,23 @@ class CispQTLAnalyzer:
             'method2': data.method2,
             'method3': data.method3,
             'method4': data.method4
+        }
+        
+        # Filter truth dataset once with fixed threshold
+        truth_sig = datasets['truth'][datasets['truth']['pval_nominal'] < self.truth_threshold].copy()
+        print(f"  Truth dataset: {len(truth_sig)} associations at p < {self.truth_threshold}")
+        
+        # Pre-process truth sets for each level
+        truth_sig['assoc_id'] = truth_sig['phenotype_id'] + ':' + truth_sig['variant_id']
+        truth_sig_clean = self._deduplicate_associations(truth_sig, f'truth at p<{self.truth_threshold}')
+        truth_assoc_set = set(truth_sig_clean['assoc_id'])
+        truth_phenotype_set = set(truth_sig['phenotype_id'].unique())
+        truth_variant_set = set(truth_sig['variant_id'].unique())
+        
+        truth_sets = {
+            'associations': truth_assoc_set,
+            'phenotypes': truth_phenotype_set,
+            'variants': truth_variant_set
         }
         
         for i, method in enumerate(method_names):
@@ -574,16 +595,19 @@ class CispQTLAnalyzer:
             }
             
             for threshold in thresholds:
-                truth_sig = datasets['truth'][datasets['truth']['pval_nominal'] < threshold].copy()
+                # Only vary the method threshold
                 method_sig = datasets[method][datasets[method]['pval_nominal'] < threshold].copy()
                 for level_name, level_results in result_levels.items():
-                    if len(truth_sig) == 0 and len(method_sig) == 0:
+                    # Get the fixed truth set for this level
+                    truth_set = truth_sets[level_name]
+                    
+                    if len(truth_set) == 0 and len(method_sig) == 0:
                         level_results['precisions'].append(0.0)
                         level_results['recalls'].append(0.0)
                         level_results['method_overlaps'].append(0.0)
                         level_results['truth_overlaps'].append(0.0)
                         continue
-                    elif len(truth_sig) == 0:
+                    elif len(truth_set) == 0:
                         level_results['precisions'].append(0.0)
                         level_results['recalls'].append(0.0)
                         level_results['method_overlaps'].append(0.0)
@@ -596,22 +620,16 @@ class CispQTLAnalyzer:
                         level_results['truth_overlaps'].append(0.0)
                         continue
                     
+                    # Process method data based on level
                     if level_name == 'associations':
-                        truth_sig['assoc_id'] = truth_sig['phenotype_id'] + ':' + truth_sig['variant_id']
                         method_sig['assoc_id'] = method_sig['phenotype_id'] + ':' + method_sig['variant_id']
-                        
-                        truth_sig_clean = self._deduplicate_associations(truth_sig, f'truth at p<{threshold}')
                         method_sig_clean = self._deduplicate_associations(method_sig, f'{method_name} at p<{threshold}')
-                        
-                        truth_set = set(truth_sig_clean['assoc_id'])
                         method_set = set(method_sig_clean['assoc_id'])
                         
                     elif level_name == 'phenotypes':
-                        truth_set = set(truth_sig['phenotype_id'].unique())
                         method_set = set(method_sig['phenotype_id'].unique())
                         
                     elif level_name == 'variants':
-                        truth_set = set(truth_sig['variant_id'].unique())
                         method_set = set(method_sig['variant_id'].unique())
                     
                     intersection = truth_set & method_set
@@ -638,9 +656,11 @@ class CispQTLAnalyzer:
             pr_results[method] = {
                 'method_name': method_name,
                 'thresholds': thresholds,
+                'truth_threshold': self.truth_threshold,
                 **result_levels
             }
         
+        pr_results['truth_threshold'] = self.truth_threshold
         return pr_results
     
     def generate_figure_0_precision_recall_analysis(self, data: pQTLData, pr_results: Dict[str, any]):
@@ -665,7 +685,10 @@ class CispQTLAnalyzer:
         fig = plt.figure(figsize=(12, 16))
         gs = GridSpec(4, 3, figure=fig, hspace=0.4, wspace=0.3)
         
-        fig.suptitle('Precision-Recall Analysis Across Significance Thresholds', 
+        # Get truth threshold from pr_results
+        truth_threshold = pr_results.get('truth_threshold', self.truth_threshold)
+        
+        fig.suptitle(f'Precision-Recall Analysis (Truth at p < {truth_threshold:.0e})', 
                     fontsize=20, fontweight='bold')
         
         # Colors for methods
@@ -681,15 +704,20 @@ class CispQTLAnalyzer:
         for level_idx, (level, level_title, marker) in enumerate(zip(levels, level_titles, markers)):
             ax = fig.add_subplot(gs[0, level_idx])
             
-            for i, (method, results) in enumerate(pr_results.items()):
-                if i < len(method_colors) and level in results:
+            method_idx = 0
+            for method, results in pr_results.items():
+                # Skip non-method entries like 'truth_threshold'
+                if method == 'truth_threshold' or not isinstance(results, dict):
+                    continue
+                if method_idx < len(method_colors) and level in results:
                     ax.plot(results[level]['recalls'], results[level]['precisions'], 
                            marker=marker, linewidth=2, markersize=4,
-                           color=method_colors[i], alpha=0.8,
+                           color=method_colors[method_idx], alpha=0.8,
                            label=results['method_name'])
+                    method_idx += 1
             
-            ax.set_xlabel('Recall (Sensitivity)')
-            ax.set_ylabel('Precision')
+            ax.set_xlabel(f'Recall (Fraction of Truth at p<{truth_threshold:.0e})')
+            ax.set_ylabel(f'Precision (Fraction Correct)')
             ax.set_title(f'{level_title} PR Curves', fontweight='bold')
             ax.grid(True, alpha=0.3)
             if level_idx == 0:
@@ -701,23 +729,28 @@ class CispQTLAnalyzer:
         for level_idx, (level, level_title, marker) in enumerate(zip(levels, level_titles, markers)):
             ax = fig.add_subplot(gs[1, level_idx])
             
-            for i, (method, results) in enumerate(pr_results.items()):
-                if i < len(method_colors) and level in results:
+            method_idx = 0
+            for method, results in pr_results.items():
+                # Skip non-method entries like 'truth_threshold'
+                if method == 'truth_threshold' or not isinstance(results, dict):
+                    continue
+                if method_idx < len(method_colors) and level in results:
                     # Sort log_thresholds to ensure x-axis goes from left to right
                     thresholds = results['thresholds']
                     log_thresholds = [-np.log10(t) for t in thresholds]
                     # Create sorted indices to ensure x-axis is properly ordered
                     sorted_indices = np.argsort(log_thresholds)
-                    sorted_log_thresholds = [log_thresholds[i] for i in sorted_indices]
-                    sorted_overlaps = [results[level]['method_overlaps'][i] for i in sorted_indices]
+                    sorted_log_thresholds = [log_thresholds[j] for j in sorted_indices]
+                    sorted_overlaps = [results[level]['method_overlaps'][j] for j in sorted_indices]
                     ax.plot(sorted_log_thresholds, sorted_overlaps, 
                            marker=marker, linewidth=2, markersize=4,
-                           color=method_colors[i], alpha=0.8,
+                           color=method_colors[method_idx], alpha=0.8,
                            label=results['method_name'])
+                    method_idx += 1
             
-            ax.set_xlabel('-log₁₀(p-value threshold)')
-            ax.set_ylabel('Method Overlap %')
-            ax.set_title(f'{level_title} Method-side Overlap', fontweight='bold')
+            ax.set_xlabel('-log₁₀(Method p-value threshold)')
+            ax.set_ylabel('Precision (%)')
+            ax.set_title(f'{level_title} Precision vs Threshold', fontweight='bold')
             ax.grid(True, alpha=0.3)
             if level_idx == 0:
                 ax.legend()
@@ -727,23 +760,28 @@ class CispQTLAnalyzer:
         for level_idx, (level, level_title, marker) in enumerate(zip(levels, level_titles, markers)):
             ax = fig.add_subplot(gs[2, level_idx])
             
-            for i, (method, results) in enumerate(pr_results.items()):
-                if i < len(method_colors) and level in results:
+            method_idx = 0
+            for method, results in pr_results.items():
+                # Skip non-method entries like 'truth_threshold'
+                if method == 'truth_threshold' or not isinstance(results, dict):
+                    continue
+                if method_idx < len(method_colors) and level in results:
                     # Sort log_thresholds to ensure x-axis goes from left to right
                     thresholds = results['thresholds']
                     log_thresholds = [-np.log10(t) for t in thresholds]
                     # Create sorted indices to ensure x-axis is properly ordered
                     sorted_indices = np.argsort(log_thresholds)
-                    sorted_log_thresholds = [log_thresholds[i] for i in sorted_indices]
-                    sorted_overlaps = [results[level]['truth_overlaps'][i] for i in sorted_indices]
+                    sorted_log_thresholds = [log_thresholds[j] for j in sorted_indices]
+                    sorted_overlaps = [results[level]['truth_overlaps'][j] for j in sorted_indices]
                     ax.plot(sorted_log_thresholds, sorted_overlaps, 
                            marker=marker, linewidth=2, markersize=4,
-                           color=method_colors[i], alpha=0.8,
+                           color=method_colors[method_idx], alpha=0.8,
                            label=results['method_name'])
+                    method_idx += 1
             
-            ax.set_xlabel('-log₁₀(p-value threshold)')
-            ax.set_ylabel('Truth Overlap %')
-            ax.set_title(f'{level_title} Truth-side Overlap', fontweight='bold')
+            ax.set_xlabel('-log₁₀(Method p-value threshold)')
+            ax.set_ylabel('Recall (%)')
+            ax.set_title(f'{level_title} Recall vs Threshold', fontweight='bold')
             ax.grid(True, alpha=0.3)
             if level_idx == 0:
                 ax.legend()
@@ -757,6 +795,9 @@ class CispQTLAnalyzer:
         for level, level_title in zip(levels, level_titles):
             auc_data.append([level_title, '', ''])  # Header row
             for method, results in pr_results.items():
+                # Skip non-method entries like 'truth_threshold'
+                if method == 'truth_threshold' or not isinstance(results, dict):
+                    continue
                 if level in results:
                     # Sort by recall to ensure proper AUC calculation
                     recalls = np.array(results[level]['recalls'])
@@ -782,9 +823,9 @@ class CispQTLAnalyzer:
         ax5 = fig.add_subplot(gs[3, 1])
         
         # Prepare data for heatmap (use association level)
-        methods = list(pr_results.keys())
+        methods = [k for k in pr_results.keys() if k != 'truth_threshold' and isinstance(pr_results[k], dict)]
         method_names = [pr_results[m]['method_name'] for m in methods]
-        thresholds = pr_results[methods[0]]['thresholds']
+        thresholds = pr_results[methods[0]]['thresholds'] if methods else []
         
         # Create matrix of F1 scores for associations
         f1_matrix = []
@@ -837,6 +878,9 @@ class CispQTLAnalyzer:
             level_f1s = []
             level_methods = []
             for method, results in pr_results.items():
+                # Skip non-method entries like 'truth_threshold'
+                if method == 'truth_threshold' or not isinstance(results, dict):
+                    continue
                 if level in results:
                     f1_scores = []
                     for p, r in zip(results[level]['precisions'], results[level]['recalls']):
@@ -1661,6 +1705,9 @@ class CispQTLAnalyzer:
             levels = ['associations', 'phenotypes', 'variants']
             
             for method, results in pr_results.items():
+                # Skip non-method entries like 'truth_threshold'
+                if method == 'truth_threshold' or not isinstance(results, dict):
+                    continue
                 for level in levels:
                     if level in results:
                         for i, threshold in enumerate(results['thresholds']):
@@ -1685,6 +1732,9 @@ class CispQTLAnalyzer:
             # Save AUC summary for all levels
             auc_summary = []
             for method, results in pr_results.items():
+                # Skip non-method entries like 'truth_threshold'
+                if method == 'truth_threshold' or not isinstance(results, dict):
+                    continue
                 for level in levels:
                     if level in results:
                         # Sort by recall to ensure proper AUC calculation
@@ -1723,6 +1773,7 @@ class CispQTLAnalyzer:
             f.write("=" * 80 + "\n")
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Significance threshold: p < {data.significance_threshold}\n")
+            f.write(f"Truth threshold for PR analysis: p < {self.truth_threshold}\n")
             f.write(f"Method names: {', '.join(data.method_names)}\n\n")
             
             # Significant hits summary
@@ -1800,6 +1851,9 @@ class CispQTLAnalyzer:
                     # Calculate and sort by AUC for this level
                     auc_results = []
                     for method, results in pr_results.items():
+                        # Skip non-method entries like 'truth_threshold'
+                        if method == 'truth_threshold' or not isinstance(results, dict):
+                            continue
                         if level in results:
                             # Sort by recall to ensure proper AUC calculation
                             recalls = np.array(results[level]['recalls'])
@@ -1819,6 +1873,9 @@ class CispQTLAnalyzer:
                     f.write("-" * 55 + "\n")
                     
                     for method, results in pr_results.items():
+                        # Skip non-method entries like 'truth_threshold'
+                        if method == 'truth_threshold' or not isinstance(results, dict):
+                            continue
                         if level in results:
                             method_idx = int(method[-1]) - 1
                             method_name = data.method_names[method_idx]
@@ -1978,6 +2035,8 @@ Output:
                        help='Output directory for results (default: output_cis_pqtl_analysis)')
     parser.add_argument('--significance_threshold', type=float, default=0.05,
                        help='P-value threshold for significance (default: 0.05)')
+    parser.add_argument('--truth_threshold', type=float, default=None,
+                       help='Fixed p-value threshold for truth in PR analysis (defaults to significance_threshold)')
     
     args = parser.parse_args()
     
@@ -2007,12 +2066,15 @@ Output:
     print(f"Method 4 ({args.method4_name}): {args.method4}")
     print(f"Output directory: {args.output_dir}")
     print(f"Significance threshold: p < {args.significance_threshold}")
+    if args.truth_threshold:
+        print(f"Truth threshold for PR analysis: p < {args.truth_threshold}")
     print("=" * 50)
     
     # Initialize analyzer
     analyzer = CispQTLAnalyzer(
         output_dir=args.output_dir,
-        significance_threshold=args.significance_threshold
+        significance_threshold=args.significance_threshold,
+        truth_threshold=args.truth_threshold
     )
     
     try:

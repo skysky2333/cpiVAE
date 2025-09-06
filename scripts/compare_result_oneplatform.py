@@ -23,7 +23,8 @@ from matplotlib.gridspec import GridSpec
 import matplotlib.patches as mpatches
 
 from scipy import stats
-from scipy.stats import pearsonr, spearmanr, linregress
+from scipy.stats import pearsonr, spearmanr, linregress, binomtest, wilcoxon
+
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -105,6 +106,7 @@ class AnalysisData:
     metrics: Dict[str, pd.DataFrame] = None
     spearman_metrics: Dict[str, pd.DataFrame] = None
     phenotype_data: Optional[pd.DataFrame] = None
+    phenotype_data_full: Optional[pd.DataFrame] = None  # Stores full unfiltered phenotype data
     binary_pheno_cols: Optional[List[str]] = None
     continuous_pheno_cols: Optional[List[str]] = None
 
@@ -563,6 +565,9 @@ class ComparativeAnalyzer:
         phenotype_df = phenotype_df.loc[list(common_samples)]
         phenotype_df = phenotype_df.reindex(data.truth_a.columns).dropna(how='all')
         
+        # Store the full unfiltered phenotype data for comprehensive analysis (Figure 30)
+        data.phenotype_data_full = phenotype_df.copy()
+        
         # Validate specified phenotype columns exist
         all_pheno_cols = []
         if data.binary_pheno_cols:
@@ -614,6 +619,54 @@ class ComparativeAnalyzer:
         
         return data
     
+    def detect_all_phenotypes(self, phenotype_df: pd.DataFrame, exclude_cols: List[str] = None) -> Tuple[List[str], List[str]]:
+        """Automatically detect all binary and continuous phenotypes in the data.
+        
+        This method analyzes all columns in the phenotype DataFrame to identify:
+        - Binary phenotypes: columns with exactly 2 unique values
+        - Continuous phenotypes: numeric columns with 3 or more unique values
+        
+        Args:
+            phenotype_df: DataFrame containing phenotype data
+            exclude_cols: List of column names to exclude from detection
+        
+        Returns:
+            Tuple of (binary_phenotype_columns, continuous_phenotype_columns)
+        """
+        if exclude_cols is None:
+            exclude_cols = []
+        
+        binary_cols = []
+        continuous_cols = []
+        
+        for col in phenotype_df.columns:
+            if col in exclude_cols:
+                continue
+                
+            series = phenotype_df[col]
+            non_null = series.dropna()
+            unique_values = pd.unique(non_null)
+            
+            if unique_values.size == 0:
+                continue
+                
+            # Check for binary phenotype (exactly 2 unique values)
+            if unique_values.size == 2:
+                binary_cols.append(col)
+                continue
+            
+            # Check for continuous phenotype (numeric with 3+ unique values)
+            numeric = pd.to_numeric(non_null, errors="coerce")
+            numeric = numeric.dropna()
+            
+            if numeric.size == 0:
+                continue
+                
+            if pd.unique(numeric).size >= 3:
+                continuous_cols.append(col)
+        
+        return binary_cols, continuous_cols
+        
     def calculate_binary_associations(self, data: AnalysisData) -> Dict[str, pd.DataFrame]:
         """Calculate associations between features and binary phenotypes using logistic regression"""
         if data.phenotype_data is None or not data.binary_pheno_cols:
@@ -885,6 +938,327 @@ class ComparativeAnalyzer:
         
         return results
     
+    def calculate_all_binary_associations(self, data: AnalysisData) -> Dict[str, pd.DataFrame]:
+        """Calculate associations for ALL binary phenotypes (not just user-specified).
+        
+        This method discovers all binary phenotypes automatically and calculates
+        associations for each one, regardless of user specification.
+        """
+        if data.phenotype_data is None:
+            return {}
+        
+        # Detect all binary phenotypes
+        binary_cols, _ = self.detect_all_phenotypes(data.phenotype_data, exclude_cols=[])
+        
+        if not binary_cols:
+            print("  No binary phenotypes detected")
+            return {}
+            
+        print(f"  Detected {len(binary_cols)} binary phenotypes")
+        print(f"  Calculating associations for ALL {len(binary_cols)} binary phenotypes...")
+        results = {}
+        
+        # Get all available datasets (truth + imputed)
+        datasets = {
+            'Truth': data.truth_a,
+            data.method1_name: data.imp_a_m1,
+            data.method2_name: data.imp_a_m2
+        }
+        if data.imp_a_m3 is not None and data.method3_name is not None:
+            datasets[data.method3_name] = data.imp_a_m3
+        if data.imp_a_m4 is not None and data.method4_name is not None:
+            datasets[data.method4_name] = data.imp_a_m4
+        
+        for phenotype in binary_cols:
+            pheno_results = []
+            
+            # Get phenotype values aligned with proteomics samples
+            y = data.phenotype_data[phenotype].dropna()
+            
+            for method_name, protein_data in datasets.items():
+                # Align samples
+                common_samples = list(set(y.index) & set(protein_data.columns))
+                if len(common_samples) < 10:
+                    continue
+                
+                y_aligned = y[common_samples]
+                # Optional covariates (encode gender to 0/1 if provided)
+                use_gender = self.gender_col is not None and self.gender_col in data.phenotype_data.columns and phenotype != self.gender_col
+                use_age = self.age_col is not None and self.age_col in data.phenotype_data.columns and phenotype != self.age_col
+                g_numeric = None
+                a_numeric = None
+                if use_gender:
+                    g_series = data.phenotype_data.loc[common_samples, self.gender_col]
+                    # Try numeric first
+                    g_try = pd.to_numeric(g_series, errors='coerce')
+                    if pd.unique(g_try.dropna()).size == 2:
+                        g_numeric = g_try.values.astype(float)
+                    else:
+                        # Factorize strings into 0/1
+                        cats = pd.Index(sorted(pd.unique(g_series.dropna().astype(str))))
+                        if len(cats) == 2:
+                            mapping = {cat: i for i, cat in enumerate(cats)}
+                            g_numeric = g_series.astype(str).map(mapping).astype(float).values
+                        else:
+                            g_numeric = None
+                if use_age:
+                    a_series = data.phenotype_data.loc[common_samples, self.age_col]
+                    a_numeric = pd.to_numeric(a_series, errors='coerce').values.astype(float)
+                    
+                # Encode phenotype to 0/1
+                unique_vals = pd.unique(y_aligned.dropna())
+                if len(unique_vals) != 2:
+                    continue
+                    
+                # Map to 0/1
+                if pd.api.types.is_numeric_dtype(y_aligned):
+                    sorted_vals = np.sort(unique_vals)
+                    y_encoded = (y_aligned == sorted_vals[1]).astype(float)
+                else:
+                    categories = sorted(unique_vals)
+                    y_encoded = (y_aligned == categories[1]).astype(float)
+                
+                # Analyze each feature
+                for feature in protein_data.index[:]:  # Analyze all features
+                    X_feature = protein_data.loc[feature, common_samples].values.astype(float)
+                    
+                    # Create mask for complete cases
+                    mask = np.isfinite(X_feature) & np.isfinite(y_encoded.values)
+                    if use_gender and g_numeric is not None:
+                        mask &= np.isfinite(g_numeric)
+                    if use_age and a_numeric is not None:
+                        mask &= np.isfinite(a_numeric)
+                    
+                    if mask.sum() < 10:
+                        continue
+                    
+                    y_clean = y_encoded.values[mask]
+                    X_clean = X_feature[mask]
+                    
+                    # Check for variation in binary outcome
+                    if len(np.unique(y_clean)) < 2:
+                        continue
+                    
+                    try:
+                        # Standardize X
+                        X_scaled = StandardScaler().fit_transform(X_clean.reshape(-1, 1)).flatten()
+                        
+                        # Build design matrix with optional covariates
+                        cov_cols = []
+                        if use_gender and g_numeric is not None:
+                            g = g_numeric[mask]
+                            cov_cols.append(g)
+                        if use_age and a_numeric is not None:
+                            a = a_numeric[mask]
+                            a = StandardScaler().fit_transform(a.reshape(-1, 1)).flatten()
+                            cov_cols.append(a)
+                        if cov_cols:
+                            X = np.column_stack([X_scaled] + cov_cols)
+                        else:
+                            X = X_scaled.reshape(-1, 1)
+                        
+                        # Fit logistic regression
+                        lr = LogisticRegression(solver='lbfgs', max_iter=1000, fit_intercept=True)
+                        lr.fit(X, y_clean)
+                        
+                        # Get coefficient for feature (first column)
+                        beta = lr.coef_[0, 0]
+                        
+                        # Calculate odds ratio
+                        odds_ratio = np.exp(beta)
+                        
+                        # Calculate p-value using Wald test
+                        # Get predicted probabilities
+                        probs = lr.predict_proba(X)[:, 1]
+                        W = probs * (1 - probs)
+                        X_weighted = X * np.sqrt(W)[:, None]
+                        
+                        # Add intercept column for proper SE calculation
+                        X_aug = np.column_stack([X, np.ones(len(X))])
+                        X_weighted_aug = X_aug * np.sqrt(W)[:, None]
+                        
+                        try:
+                            fisher_info = X_weighted_aug.T @ X_weighted_aug
+                            cov_matrix = np.linalg.inv(fisher_info)
+                            se = np.sqrt(cov_matrix[0, 0])
+                            
+                            # Calculate confidence interval
+                            ci_lower = np.exp(beta - 1.96 * se)
+                            ci_upper = np.exp(beta + 1.96 * se)
+                            
+                            # Calculate p-value
+                            z_score = beta / se if se > 0 else np.nan
+                            p_value = 2 * (1 - stats.norm.cdf(abs(z_score))) if not np.isnan(z_score) else np.nan
+                            
+                        except np.linalg.LinAlgError:
+                            ci_lower, ci_upper, p_value = np.nan, np.nan, np.nan
+                        
+                        pheno_results.append({
+                            'feature': feature,
+                            'method': method_name,
+                            'odds_ratio': odds_ratio,
+                            'ci_lower': ci_lower,
+                            'ci_upper': ci_upper,
+                            'p_value': p_value,
+                            'n_samples': len(X_clean)
+                        })
+                        
+                    except Exception as e:
+                        # Skip features that cause issues
+                        continue
+            
+            if pheno_results:
+                results[phenotype] = pd.DataFrame(pheno_results)
+        
+        return results
+    
+    def calculate_all_continuous_associations(self, data: AnalysisData) -> Dict[str, pd.DataFrame]:
+        """Calculate associations for ALL continuous phenotypes (not just user-specified).
+        
+        This method discovers all continuous phenotypes automatically and calculates
+        associations for each one, regardless of user specification.
+        """
+        if data.phenotype_data is None:
+            return {}
+        
+        # Detect all continuous phenotypes
+        _, continuous_cols = self.detect_all_phenotypes(data.phenotype_data, exclude_cols=[])
+        
+        if not continuous_cols:
+            print("  No continuous phenotypes detected")
+            return {}
+            
+        print(f"  Detected {len(continuous_cols)} continuous phenotypes")
+        print(f"  Calculating associations for ALL {len(continuous_cols)} continuous phenotypes...")
+        results = {}
+        
+        # Get all available datasets (truth + imputed)
+        datasets = {
+            'Truth': data.truth_a,
+            data.method1_name: data.imp_a_m1,
+            data.method2_name: data.imp_a_m2
+        }
+        if data.imp_a_m3 is not None and data.method3_name is not None:
+            datasets[data.method3_name] = data.imp_a_m3
+        if data.imp_a_m4 is not None and data.method4_name is not None:
+            datasets[data.method4_name] = data.imp_a_m4
+        
+        for phenotype in continuous_cols:
+            pheno_results = []
+            
+            # Get phenotype values aligned with proteomics samples
+            y = data.phenotype_data[phenotype].dropna()
+            
+            for method_name, protein_data in datasets.items():
+                # Align samples
+                common_samples = list(set(y.index) & set(protein_data.columns))
+                if len(common_samples) < 10:
+                    continue
+                
+                y_aligned = y[common_samples]
+                # Optional covariates (encode gender to 0/1 if provided)
+                use_gender = self.gender_col is not None and self.gender_col in data.phenotype_data.columns and phenotype != self.gender_col
+                use_age = self.age_col is not None and self.age_col in data.phenotype_data.columns and phenotype != self.age_col
+                g_numeric = None
+                a_numeric = None
+                if use_gender:
+                    g_series = data.phenotype_data.loc[common_samples, self.gender_col]
+                    g_try = pd.to_numeric(g_series, errors='coerce')
+                    if pd.unique(g_try.dropna()).size == 2:
+                        g_numeric = g_try.values.astype(float)
+                    else:
+                        cats = pd.Index(sorted(pd.unique(g_series.dropna().astype(str))))
+                        if len(cats) == 2:
+                            mapping = {cat: i for i, cat in enumerate(cats)}
+                            g_numeric = g_series.astype(str).map(mapping).astype(float).values
+                        else:
+                            g_numeric = None
+                if use_age:
+                    a_series = data.phenotype_data.loc[common_samples, self.age_col]
+                    a_numeric = pd.to_numeric(a_series, errors='coerce').values.astype(float)
+                
+                # Analyze each feature
+                for feature in protein_data.index[:]:  # Analyze all features
+                    X_feature = protein_data.loc[feature, common_samples].values.astype(float)
+                    y_values = pd.to_numeric(y_aligned, errors='coerce').values.astype(float)
+                    
+                    # Create mask for complete cases
+                    mask = np.isfinite(X_feature) & np.isfinite(y_values)
+                    if use_gender and g_numeric is not None:
+                        mask &= np.isfinite(g_numeric)
+                    if use_age and a_numeric is not None:
+                        mask &= np.isfinite(a_numeric)
+                        
+                    if mask.sum() < 10:
+                        continue
+                    
+                    y_clean = y_values[mask]
+                    X_clean = X_feature[mask]
+                    
+                    try:
+                        # Standardize both X and y
+                        X_feature = StandardScaler().fit_transform(X_clean.reshape(-1, 1)).flatten()
+                        y_scaled = StandardScaler().fit_transform(y_clean.reshape(-1, 1)).flatten()
+                        
+                        # Build design matrix with optional covariates
+                        cov_cols = []
+                        if use_gender and g_numeric is not None:
+                            cov_cols.append(g_numeric[mask])
+                        if use_age and a_numeric is not None:
+                            a = a_numeric[mask]
+                            a = StandardScaler().fit_transform(a.reshape(-1, 1)).flatten()
+                            cov_cols.append(a)
+                        if cov_cols:
+                            X = np.column_stack([X_feature] + cov_cols + [np.ones_like(X_feature)])
+                        else:
+                            X = np.column_stack([X_feature, np.ones_like(X_feature)])
+                        
+                        # OLS via normal equations
+                        XtX = X.T @ X
+                        XtX_inv = np.linalg.inv(XtX)
+                        beta_vec = XtX_inv @ (X.T @ y_scaled)
+                        beta = beta_vec[0]
+                        y_pred = X @ beta_vec
+                        residuals = y_scaled - y_pred
+                        n = X.shape[0]
+                        p = X.shape[1]
+                        mse = (residuals @ residuals) / (n - p)
+                        se = np.sqrt(np.maximum(mse * XtX_inv[0, 0], 0.0))
+                        
+                        # Calculate confidence interval
+                        ci_lower = beta - 1.96 * se
+                        ci_upper = beta + 1.96 * se
+                        
+                        # Calculate p-value (t-test)
+                        t_stat = beta / se if se > 0 else np.nan
+                        df = n - p
+                        p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df)) if not np.isnan(t_stat) else np.nan
+                        
+                        # Calculate R-squared
+                        ss_res = residuals @ residuals
+                        ss_tot = ((y_scaled - y_scaled.mean()) @ (y_scaled - y_scaled.mean()))
+                        r_squared = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else np.nan
+                        
+                        pheno_results.append({
+                            'feature': feature,
+                            'method': method_name,
+                            'beta': beta,
+                            'ci_lower': ci_lower,
+                            'ci_upper': ci_upper,
+                            'p_value': p_value,
+                            'r_squared': r_squared,
+                            'n_samples': len(X_clean)
+                        })
+                        
+                    except Exception as e:
+                        # Skip features that cause issues
+                        continue
+            
+            if pheno_results:
+                results[phenotype] = pd.DataFrame(pheno_results)
+                
+        return results
+      
     def _calculate_association_mae_binary(self, association_results: Dict[str, pd.DataFrame], return_raw: bool = False) -> Dict[str, float]:
         """Calculate mean absolute error of odds ratios for binary phenotype associations.
         
@@ -1358,6 +1732,280 @@ class ComparativeAnalyzer:
         
         return diff_results
     
+    def _calculate_association_correlation_binary_per_feature(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate Pearson correlation between imputed and truth protein values for significant features.
+        
+        For each feature that is significant in the Truth method (FDR < 0.05), calculates the
+        correlation between the imputed and true protein values across all samples.
+        
+        Args:
+            data: AnalysisData object containing truth and imputed protein matrices
+            association_results: Dictionary mapping phenotype names to DataFrames with
+                               association results containing columns: method, feature, odds_ratio, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual feature correlations.
+            Each value represents the correlation for one significant feature from any phenotype.
+        """
+        corr_results = {}
+        
+        # Get all significant features across all phenotypes
+        all_significant_features = set()
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05]
+            all_significant_features.update(significant_truth['feature'].values)
+        
+        if not all_significant_features:
+            return corr_results
+        
+        # Calculate correlation for each method
+        datasets = {
+            data.method1_name: data.imp_a_m1,
+            data.method2_name: data.imp_a_m2
+        }
+        if data.imp_a_m3 is not None and data.method3_name is not None:
+            datasets[data.method3_name] = data.imp_a_m3
+        if data.imp_a_m4 is not None and data.method4_name is not None:
+            datasets[data.method4_name] = data.imp_a_m4
+        
+        for method_name, imputed_data in datasets.items():
+            if method_name not in corr_results:
+                corr_results[method_name] = []
+            
+            for feature in all_significant_features:
+                if feature not in data.truth_a.index or feature not in imputed_data.index:
+                    continue
+                
+                truth_vals = data.truth_a.loc[feature].values
+                imp_vals = imputed_data.loc[feature].values
+                
+                # Remove NaN values
+                mask = ~(np.isnan(truth_vals) | np.isnan(imp_vals))
+                if np.sum(mask) < 3:  # Need at least 3 points
+                    continue
+                
+                truth_clean = truth_vals[mask]
+                imp_clean = imp_vals[mask]
+                
+                # Calculate Pearson correlation
+                r, _ = pearsonr(truth_clean, imp_clean)
+                if np.isfinite(r):
+                    corr_results[method_name].append(r)
+        
+        return corr_results
+    
+    def _calculate_association_correlation_continuous_per_feature(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate Pearson correlation between imputed and truth protein values for significant features.
+        
+        For each feature that is significant in the Truth method (FDR < 0.05), calculates the
+        correlation between the imputed and true protein values across all samples.
+        
+        Args:
+            data: AnalysisData object containing truth and imputed protein matrices
+            association_results: Dictionary mapping phenotype names to DataFrames with
+                               association results containing columns: method, feature, beta, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual feature correlations.
+            Each value represents the correlation for one significant feature from any phenotype.
+        """
+        corr_results = {}
+        
+        # Get all significant features across all phenotypes
+        all_significant_features = set()
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05]
+            all_significant_features.update(significant_truth['feature'].values)
+        
+        if not all_significant_features:
+            return corr_results
+        
+        # Calculate correlation for each method
+        datasets = {
+            data.method1_name: data.imp_a_m1,
+            data.method2_name: data.imp_a_m2
+        }
+        if data.imp_a_m3 is not None and data.method3_name is not None:
+            datasets[data.method3_name] = data.imp_a_m3
+        if data.imp_a_m4 is not None and data.method4_name is not None:
+            datasets[data.method4_name] = data.imp_a_m4
+        
+        for method_name, imputed_data in datasets.items():
+            if method_name not in corr_results:
+                corr_results[method_name] = []
+            
+            for feature in all_significant_features:
+                if feature not in data.truth_a.index or feature not in imputed_data.index:
+                    continue
+                
+                truth_vals = data.truth_a.loc[feature].values
+                imp_vals = imputed_data.loc[feature].values
+                
+                # Remove NaN values
+                mask = ~(np.isnan(truth_vals) | np.isnan(imp_vals))
+                if np.sum(mask) < 3:  # Need at least 3 points
+                    continue
+                
+                truth_clean = truth_vals[mask]
+                imp_clean = imp_vals[mask]
+                
+                # Calculate Pearson correlation
+                r, _ = pearsonr(truth_clean, imp_clean)
+                if np.isfinite(r):
+                    corr_results[method_name].append(r)
+        
+        return corr_results
+    
+    def _calculate_association_r_squared_binary_per_feature(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate R-squared between imputed and truth protein values for significant features.
+        
+        For each feature that is significant in the Truth method (FDR < 0.05), calculates the
+        R-squared value from linear regression of imputed vs true protein values.
+        
+        Args:
+            data: AnalysisData object containing truth and imputed protein matrices
+            association_results: Dictionary mapping phenotype names to DataFrames with
+                               association results containing columns: method, feature, odds_ratio, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual feature R-squared values.
+            Each value represents the R-squared for one significant feature from any phenotype.
+        """
+        r2_results = {}
+        
+        # Get all significant features across all phenotypes
+        all_significant_features = set()
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05]
+            all_significant_features.update(significant_truth['feature'].values)
+        
+        if not all_significant_features:
+            return r2_results
+        
+        # Calculate R-squared for each method
+        datasets = {
+            data.method1_name: data.imp_a_m1,
+            data.method2_name: data.imp_a_m2
+        }
+        if data.imp_a_m3 is not None and data.method3_name is not None:
+            datasets[data.method3_name] = data.imp_a_m3
+        if data.imp_a_m4 is not None and data.method4_name is not None:
+            datasets[data.method4_name] = data.imp_a_m4
+        
+        for method_name, imputed_data in datasets.items():
+            if method_name not in r2_results:
+                r2_results[method_name] = []
+            
+            for feature in all_significant_features:
+                if feature not in data.truth_a.index or feature not in imputed_data.index:
+                    continue
+                
+                truth_vals = data.truth_a.loc[feature].values
+                imp_vals = imputed_data.loc[feature].values
+                
+                # Remove NaN values
+                mask = ~(np.isnan(truth_vals) | np.isnan(imp_vals))
+                if np.sum(mask) < 3:  # Need at least 3 points
+                    continue
+                
+                truth_clean = truth_vals[mask]
+                imp_clean = imp_vals[mask]
+                
+                # Calculate R-squared using correlation coefficient
+                r, _ = pearsonr(truth_clean, imp_clean)
+                if np.isfinite(r):
+                    r2 = r ** 2
+                    r2_results[method_name].append(r2)
+        
+        return r2_results
+    
+    def _calculate_association_r_squared_continuous_per_feature(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]) -> Dict[str, List[float]]:
+        """Calculate R-squared between imputed and truth protein values for significant features.
+        
+        For each feature that is significant in the Truth method (FDR < 0.05), calculates the
+        R-squared value from linear regression of imputed vs true protein values.
+        
+        Args:
+            data: AnalysisData object containing truth and imputed protein matrices
+            association_results: Dictionary mapping phenotype names to DataFrames with
+                               association results containing columns: method, feature, beta, p_value
+        
+        Returns:
+            Dictionary mapping method names to lists of individual feature R-squared values.
+            Each value represents the R-squared for one significant feature from any phenotype.
+        """
+        r2_results = {}
+        
+        # Get all significant features across all phenotypes
+        all_significant_features = set()
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+            
+            _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+            truth_results['p_adj'] = pvals_corrected
+            significant_truth = truth_results[truth_results['p_adj'] < 0.05]
+            all_significant_features.update(significant_truth['feature'].values)
+        
+        if not all_significant_features:
+            return r2_results
+        
+        # Calculate R-squared for each method
+        datasets = {
+            data.method1_name: data.imp_a_m1,
+            data.method2_name: data.imp_a_m2
+        }
+        if data.imp_a_m3 is not None and data.method3_name is not None:
+            datasets[data.method3_name] = data.imp_a_m3
+        if data.imp_a_m4 is not None and data.method4_name is not None:
+            datasets[data.method4_name] = data.imp_a_m4
+        
+        for method_name, imputed_data in datasets.items():
+            if method_name not in r2_results:
+                r2_results[method_name] = []
+            
+            for feature in all_significant_features:
+                if feature not in data.truth_a.index or feature not in imputed_data.index:
+                    continue
+                
+                truth_vals = data.truth_a.loc[feature].values
+                imp_vals = imputed_data.loc[feature].values
+                
+                # Remove NaN values
+                mask = ~(np.isnan(truth_vals) | np.isnan(imp_vals))
+                if np.sum(mask) < 3:  # Need at least 3 points
+                    continue
+                
+                truth_clean = truth_vals[mask]
+                imp_clean = imp_vals[mask]
+                
+                # Calculate R-squared using correlation coefficient
+                r, _ = pearsonr(truth_clean, imp_clean)
+                if np.isfinite(r):
+                    r2 = r ** 2
+                    r2_results[method_name].append(r2)
+        
+        return r2_results
+    
     def generate_figure_26_comprehensive_method_comparison(self, data: AnalysisData):
         """Figure 26: Comprehensive comparison of all available methods (mean and median correlations)"""
         print("Generating Figure 26: Comprehensive method comparison...")
@@ -1596,11 +2244,11 @@ class ComparativeAnalyzer:
         return fig
     
     def generate_figure_28b_phenotype_summary_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
-        """Generate Figure 28b: Binary phenotype association performance summary with violin plots.
+        """Generate Figure 28b: Binary phenotype association performance summary with bar plots.
         
         Creates a comprehensive visualization comparing method performance on binary phenotype
-        associations using two key metrics: Mean Absolute Error (MAE) of odds ratios and
-        Spearman correlation of effect sizes (log odds ratios).
+        associations using three key metrics: Mean Absolute Error (MAE) of odds ratios,
+        Pearson correlation of protein values, and R-squared of protein values.
         
         Args:
             data: AnalysisData object containing method configuration and metadata
@@ -1608,30 +2256,130 @@ class ComparativeAnalyzer:
                                association results containing columns: method, feature, odds_ratio, p_value
         
         Returns:
-            matplotlib.figure.Figure: Two-panel figure with violin plots showing:
-                - Left panel: MAE distribution across phenotypes for each method
-                - Right panel: Effect correlation distribution across phenotypes for each method
+            matplotlib.figure.Figure: Three-panel figure with bar plots showing:
+                - Left panel: MAE of odds ratios vs Truth
+                - Middle panel: Correlation (r) between method and truth protein values
+                - Right panel: R-squared between method and truth protein values
                 Returns None if no association results available.
                 
         Note:
             Excludes Method4 if present. Only considers Truth-significant features (FDR < 0.05).
-            Violin plots show distribution, mean, median, and summary statistics.
         """
+        # Calculate associations for ALL binary phenotypes if not provided
         if not association_results:
-            print("  No binary phenotype associations to summarize")
-            return None
+            print("  Calculating associations for ALL binary phenotypes for Figure 28b...")
+            
+            # Use full phenotype data if available
+            original_phenotype_data = data.phenotype_data
+            if hasattr(data, 'phenotype_data_full') and data.phenotype_data_full is not None:
+                data.phenotype_data = data.phenotype_data_full
+            
+            association_results = self.calculate_all_binary_associations(data)
+            
+            # Restore original phenotype data
+            data.phenotype_data = original_phenotype_data
+            
+            if not association_results:
+                print("  No binary phenotype associations to summarize")
+                return None
         
         mae_results_raw = self._calculate_association_mae_binary_per_feature(association_results)
-        diff_results_raw = self._calculate_effect_size_diff_binary_per_feature(association_results)
+        corr_results_raw = self._calculate_association_correlation_binary_per_feature(data, association_results)
+        r2_results_raw = self._calculate_association_r_squared_binary_per_feature(data, association_results)
         
         if data.method4_name:
             mae_results_raw = {k: v for k, v in mae_results_raw.items() if k != data.method4_name}
-            diff_results_raw = {k: v for k, v in diff_results_raw.items() if k != data.method4_name}
+            corr_results_raw = {k: v for k, v in corr_results_raw.items() if k != data.method4_name}
+            r2_results_raw = {k: v for k, v in r2_results_raw.items() if k != data.method4_name}
         
         colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], NATURE_COLORS['accent']]
         
-        fig, (ax_mae, ax_corr) = plt.subplots(1, 2, figsize=(12, 6))
-        fig.suptitle('Binary Phenotype Associations: MAE and Effect Size Difference (Bar Plots)', fontsize=16, fontweight='bold')
+        fig, (ax_mae, ax_corr, ax_r2) = plt.subplots(1, 3, figsize=(18, 6))
+        
+        # Count phenotypes with significant associations
+        num_phenotypes_with_sig = 0
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) > 0:
+                _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+                if (pvals_corrected < 0.05).any():
+                    num_phenotypes_with_sig += 1
+        
+        fig.suptitle(f'Binary Phenotype Associations ({num_phenotypes_with_sig} phenotypes with significant associations): Performance Metrics', fontsize=16, fontweight='bold')
+        
+        # Helper function to add significance annotations
+        def add_significance_annotations(ax, data_dict, y_positions):
+            """Add pairwise significance tests and annotations"""
+            methods_list = list(data_dict.keys())
+            n_methods = len(methods_list)
+            
+            if n_methods < 2:
+                return
+            
+            # Calculate pairwise p-values
+            pairwise_tests = []
+            for i in range(n_methods):
+                for j in range(i + 1, n_methods):
+                    method1, method2 = methods_list[i], methods_list[j]
+                    data1, data2 = np.array(data_dict[method1]), np.array(data_dict[method2])
+                    
+                    # Find paired samples (same features)
+                    if len(data1) == len(data2) and len(data1) > 0:
+                        try:
+                            # Wilcoxon signed-rank test for paired data
+                            _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                        except:
+                            # Fall back to unpaired test if wilcoxon fails
+                            from scipy.stats import mannwhitneyu
+                            _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                    else:
+                        # Mann-Whitney U test for unpaired data
+                        from scipy.stats import mannwhitneyu
+                        _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                    
+                    pairwise_tests.append({
+                        'i': i, 'j': j,
+                        'method1': method1, 'method2': method2,
+                        'p_value': p_val
+                    })
+            
+            if not pairwise_tests:
+                return
+            
+            # Determine significance symbols
+            def get_significance_symbol(p):
+                if p < 0.001:
+                    return '***'
+                elif p < 0.01:
+                    return '**'
+                elif p < 0.05:
+                    return '*'
+                else:
+                    return 'ns'
+            
+            # Add significance brackets
+            y_max = max(y_positions) * 1.05  # Start brackets above bars
+            y_increment = max(y_positions) * 0.08  # Space between bracket levels
+            
+            for k, test in enumerate(pairwise_tests):
+                i, j = test['i'], test['j']
+                p_val = test['p_value']  # Use raw p-value, no correction
+                symbol = get_significance_symbol(p_val)
+                
+                # Calculate bracket height
+                y_bracket = y_max + y_increment * k
+                
+                # Draw horizontal lines
+                ax.plot([i - 0.2, i + 0.2], [y_bracket, y_bracket], 'k-', linewidth=1)
+                ax.plot([j - 0.2, j + 0.2], [y_bracket, y_bracket], 'k-', linewidth=1)
+                
+                # Draw connecting line
+                ax.plot([i, j], [y_bracket, y_bracket], 'k-', linewidth=1)
+                
+                # Add significance text
+                ax.text((i + j) / 2, y_bracket + max(y_positions) * 0.02, symbol,
+                       ha='center', va='bottom', fontsize=10, fontweight='bold')
+        
         if mae_results_raw:
             methods = list(mae_results_raw.keys())
             valid_methods = [m for m in methods if len(mae_results_raw[m]) > 0]
@@ -1644,6 +2392,9 @@ class ComparativeAnalyzer:
                 x_pos = np.arange(len(valid_methods))
                 bars = ax_mae.bar(x_pos, mean_mae, color=[colors[i % len(colors)] for i in range(len(valid_methods))], 
                                  alpha=0.8, edgecolor='black', linewidth=0.8)
+                
+                # Add significance annotations
+                add_significance_annotations(ax_mae, {m: mae_results_raw[m] for m in valid_methods}, mean_mae)
                 
                 ax_mae.set_xlabel('Method')
                 ax_mae.set_ylabel('Mean Absolute Error')
@@ -1651,47 +2402,87 @@ class ComparativeAnalyzer:
                 ax_mae.set_xticks(x_pos)
                 ax_mae.set_xticklabels(valid_methods, rotation=45, ha='right')
                 ax_mae.grid(True, alpha=0.3, axis='y')
+                
+                # Adjust y-axis to accommodate significance annotations
+                ax_mae.set_ylim(0, max(mean_mae) * 1.4)
         else:
             ax_mae.text(0.5, 0.5, 'No MAE data available', transform=ax_mae.transAxes, ha='center', va='center')
             ax_mae.set_title('MAE of Odds Ratios vs Truth (FDR<0.05)')
         
-        # Effect size difference panel - bar plot
-        if diff_results_raw:
-            methods_c = list(diff_results_raw.keys())
-            valid_methods_c = [m for m in methods_c if len(diff_results_raw[m]) > 0]
+        # Correlation panel - bar plot
+        if corr_results_raw:
+            methods_c = list(corr_results_raw.keys())
+            valid_methods_c = [m for m in methods_c if len(corr_results_raw[m]) > 0]
             
             if valid_methods_c:
-                # Calculate mean effect size difference for each method
-                mean_diff = [np.mean(diff_results_raw[m]) for m in valid_methods_c]
+                # Calculate mean correlation for each method
+                mean_corr = [np.mean(corr_results_raw[m]) for m in valid_methods_c]
                 
                 # Create bar plot
                 x_pos_c = np.arange(len(valid_methods_c))
-                bars_c = ax_corr.bar(x_pos_c, mean_diff, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
+                bars_c = ax_corr.bar(x_pos_c, mean_corr, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
                                     alpha=0.8, edgecolor='black', linewidth=0.8)
                 
+                # Add significance annotations
+                add_significance_annotations(ax_corr, {m: corr_results_raw[m] for m in valid_methods_c}, mean_corr)
+                
                 ax_corr.set_xlabel('Method')
-                ax_corr.set_ylabel('Log OR Difference')
-                ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)', fontweight='bold')
+                ax_corr.set_ylabel('Correlation (r)')
+                ax_corr.set_title('Correlation vs Truth (FDR<0.05)', fontweight='bold')
                 ax_corr.set_xticks(x_pos_c)
                 ax_corr.set_xticklabels(valid_methods_c, rotation=45, ha='right')
                 ax_corr.grid(True, alpha=0.3, axis='y')
+                
+                # Adjust y-axis to accommodate significance annotations
+                ax_corr.set_ylim(0, min(1.0, max(mean_corr) * 1.4))
         else:
-            ax_corr.text(0.5, 0.5, 'No effect size difference data available', transform=ax_corr.transAxes, ha='center', va='center')
-            ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)')
+            ax_corr.text(0.5, 0.5, 'No correlation data available', transform=ax_corr.transAxes, ha='center', va='center')
+            ax_corr.set_title('Correlation vs Truth (FDR<0.05)')
+        
+        # R-squared panel - bar plot
+        if r2_results_raw:
+            methods_r2 = list(r2_results_raw.keys())
+            valid_methods_r2 = [m for m in methods_r2 if len(r2_results_raw[m]) > 0]
+            
+            if valid_methods_r2:
+                # Calculate mean R-squared for each method
+                mean_r2 = [np.mean(r2_results_raw[m]) for m in valid_methods_r2]
+                
+                # Create bar plot
+                x_pos_r2 = np.arange(len(valid_methods_r2))
+                bars_r2 = ax_r2.bar(x_pos_r2, mean_r2, color=[colors[i % len(colors)] for i in range(len(valid_methods_r2))], 
+                                   alpha=0.8, edgecolor='black', linewidth=0.8)
+                
+                # Add significance annotations
+                add_significance_annotations(ax_r2, {m: r2_results_raw[m] for m in valid_methods_r2}, mean_r2)
+                
+                ax_r2.set_xlabel('Method')
+                ax_r2.set_ylabel('R-squared')
+                ax_r2.set_title('R² vs Truth (FDR<0.05)', fontweight='bold')
+                ax_r2.set_xticks(x_pos_r2)
+                ax_r2.set_xticklabels(valid_methods_r2, rotation=45, ha='right')
+                ax_r2.grid(True, alpha=0.3, axis='y')
+                
+                # Adjust y-axis to accommodate significance annotations
+                ax_r2.set_ylim(0, min(1.0, max(mean_r2) * 1.4))
+        else:
+            ax_r2.text(0.5, 0.5, 'No R-squared data available', transform=ax_r2.transAxes, ha='center', va='center')
+            ax_r2.set_title('R² vs Truth (FDR<0.05)')
         
         # Make panels square without distorting data aspect
         ax_mae.set_box_aspect(1)
         ax_corr.set_box_aspect(1)
+        ax_r2.set_box_aspect(1)
         
         plt.tight_layout(rect=[0, 0, 1, 0.92])
         return fig
 
     def generate_figure_29b_phenotype_summary_continuous(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
-        """Generate Figure 29b: Continuous phenotype association performance summary with violin plots.
+        """Generate Figure 29b: Continuous phenotype association performance summary with bar plots.
         
         Creates a comprehensive visualization comparing method performance on continuous phenotype
-        associations using two key metrics: Mean Absolute Error (MAE) of beta coefficients and
-        Spearman correlation of effect sizes (beta coefficients).
+        associations using three key metrics: Mean Absolute Error (MAE) of beta coefficients,
+        Pearson correlation of protein values, and R-squared of protein values.
         
         Args:
             data: AnalysisData object containing method configuration and metadata
@@ -1699,32 +2490,131 @@ class ComparativeAnalyzer:
                                association results containing columns: method, feature, beta, p_value
         
         Returns:
-            matplotlib.figure.Figure: Two-panel figure with violin plots showing:
-                - Left panel: MAE distribution across phenotypes for each method
-                - Right panel: Effect correlation distribution across phenotypes for each method
+            matplotlib.figure.Figure: Three-panel figure with bar plots showing:
+                - Left panel: MAE of beta coefficients vs Truth
+                - Middle panel: Correlation (r) between method and truth protein values
+                - Right panel: R-squared between method and truth protein values
                 Returns None if no association results available.
                 
         Note:
             Excludes Method4 if present. Only considers Truth-significant features (FDR < 0.05).
-            Violin plots show distribution, mean, median, and summary statistics.
         """
+        # Calculate associations for ALL continuous phenotypes if not provided
         if not association_results:
-            print("  No continuous phenotype associations to summarize")
-            return None
+            print("  Calculating associations for ALL continuous phenotypes for Figure 29b...")
+            
+            # Use full phenotype data if available
+            original_phenotype_data = data.phenotype_data
+            if hasattr(data, 'phenotype_data_full') and data.phenotype_data_full is not None:
+                data.phenotype_data = data.phenotype_data_full
+            
+            association_results = self.calculate_all_continuous_associations(data)
+            
+            # Restore original phenotype data
+            data.phenotype_data = original_phenotype_data
+            
+            if not association_results:
+                print("  No continuous phenotype associations to summarize")
+                return None
         
         mae_results_raw = self._calculate_association_mae_continuous_per_feature(association_results)
-        diff_results_raw = self._calculate_effect_size_diff_continuous_per_feature(association_results)
+        corr_results_raw = self._calculate_association_correlation_continuous_per_feature(data, association_results)
+        r2_results_raw = self._calculate_association_r_squared_continuous_per_feature(data, association_results)
         
         if data.method4_name:
             mae_results_raw = {k: v for k, v in mae_results_raw.items() if k != data.method4_name}
-            diff_results_raw = {k: v for k, v in diff_results_raw.items() if k != data.method4_name}
+            corr_results_raw = {k: v for k, v in corr_results_raw.items() if k != data.method4_name}
+            r2_results_raw = {k: v for k, v in r2_results_raw.items() if k != data.method4_name}
         
         colors = [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], NATURE_COLORS['accent']]
         
-        fig, (ax_mae, ax_corr) = plt.subplots(1, 2, figsize=(12, 6))
-        fig.suptitle('Continuous Phenotype Associations: MAE and Effect Size Difference (Bar Plots)', fontsize=16, fontweight='bold')
+        fig, (ax_mae, ax_corr, ax_r2) = plt.subplots(1, 3, figsize=(18, 6))
         
-        # MAE panel - bar plot
+        # Count phenotypes with significant associations
+        num_phenotypes_with_sig = 0
+        for phenotype, results_df in association_results.items():
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) > 0:
+                _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), method='fdr_bh', alpha=0.05)
+                if (pvals_corrected < 0.05).any():
+                    num_phenotypes_with_sig += 1
+        
+        fig.suptitle(f'Continuous Phenotype Associations ({num_phenotypes_with_sig} phenotypes with significant associations): Performance Metrics', fontsize=16, fontweight='bold')
+        
+        # Helper function to add significance annotations
+        def add_significance_annotations(ax, data_dict, y_positions):
+            """Add pairwise significance tests and annotations"""
+            methods_list = list(data_dict.keys())
+            n_methods = len(methods_list)
+            
+            if n_methods < 2:
+                return
+            
+            # Calculate pairwise p-values
+            pairwise_tests = []
+            for i in range(n_methods):
+                for j in range(i + 1, n_methods):
+                    method1, method2 = methods_list[i], methods_list[j]
+                    data1, data2 = np.array(data_dict[method1]), np.array(data_dict[method2])
+                    
+                    # Find paired samples (same features)
+                    if len(data1) == len(data2) and len(data1) > 0:
+                        try:
+                            # Wilcoxon signed-rank test for paired data
+                            _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                        except:
+                            # Fall back to unpaired test if wilcoxon fails
+                            from scipy.stats import mannwhitneyu
+                            _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                    else:
+                        # Mann-Whitney U test for unpaired data
+                        from scipy.stats import mannwhitneyu
+                        _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                    
+                    pairwise_tests.append({
+                        'i': i, 'j': j,
+                        'method1': method1, 'method2': method2,
+                        'p_value': p_val
+                    })
+            
+            if not pairwise_tests:
+                return
+            
+            # Determine significance symbols
+            def get_significance_symbol(p):
+                if p < 0.001:
+                    return '***'
+                elif p < 0.01:
+                    return '**'
+                elif p < 0.05:
+                    return '*'
+                else:
+                    return 'ns'
+            
+            # Add significance brackets
+            y_max = max(y_positions) * 1.05  # Start brackets above bars
+            y_increment = max(y_positions) * 0.08  # Space between bracket levels
+            
+            for k, test in enumerate(pairwise_tests):
+                i, j = test['i'], test['j']
+                p_val = test['p_value']  # Use raw p-value, no correction
+                symbol = get_significance_symbol(p_val)
+                
+                # Calculate bracket height
+                y_bracket = y_max + y_increment * k
+                
+                # Draw horizontal lines
+                ax.plot([i - 0.2, i + 0.2], [y_bracket, y_bracket], 'k-', linewidth=1)
+                ax.plot([j - 0.2, j + 0.2], [y_bracket, y_bracket], 'k-', linewidth=1)
+                
+                # Draw connecting line
+                ax.plot([i, j], [y_bracket, y_bracket], 'k-', linewidth=1)
+                
+                # Add significance text
+                ax.text((i + j) / 2, y_bracket + max(y_positions) * 0.02, symbol,
+                       ha='center', va='bottom', fontsize=10, fontweight='bold')
+        
+        # MAE panel - bar plot with significance tests
         if mae_results_raw:
             methods = list(mae_results_raw.keys())
             valid_methods = [m for m in methods if len(mae_results_raw[m]) > 0]
@@ -1738,45 +2628,92 @@ class ComparativeAnalyzer:
                 bars = ax_mae.bar(x_pos, mean_mae, color=[colors[i % len(colors)] for i in range(len(valid_methods))], 
                                  alpha=0.8, edgecolor='black', linewidth=0.8)
                 
+                # Add significance annotations
+                add_significance_annotations(ax_mae, {m: mae_results_raw[m] for m in valid_methods}, mean_mae)
+                
                 ax_mae.set_xlabel('Method')
                 ax_mae.set_ylabel('Mean Absolute Error')
                 ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)', fontweight='bold')
                 ax_mae.set_xticks(x_pos)
                 ax_mae.set_xticklabels(valid_methods, rotation=45, ha='right')
                 ax_mae.grid(True, alpha=0.3, axis='y')
+                
+                # Adjust y-axis to accommodate significance annotations
+                ax_mae.set_ylim(0, max(mean_mae) * 1.4)
         else:
             ax_mae.text(0.5, 0.5, 'No MAE data available', transform=ax_mae.transAxes, ha='center', va='center')
             ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)')
         
-        # Effect size difference panel - bar plot
-        if diff_results_raw:
-            methods_c = list(diff_results_raw.keys())
-            valid_methods_c = [m for m in methods_c if len(diff_results_raw[m]) > 0]
+        # Correlation panel - bar plot with significance tests
+        if corr_results_raw:
+            methods_c = list(corr_results_raw.keys())
+            valid_methods_c = [m for m in methods_c if len(corr_results_raw[m]) > 0]
             
             if valid_methods_c:
-                # Calculate mean effect size difference for each method
-                mean_diff = [np.mean(diff_results_raw[m]) for m in valid_methods_c]
+                # Calculate mean correlation for each method
+                mean_corr = [np.mean(corr_results_raw[m]) for m in valid_methods_c]
                 
                 # Create bar plot
                 x_pos_c = np.arange(len(valid_methods_c))
-                bars_c = ax_corr.bar(x_pos_c, mean_diff, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
+                bars_c = ax_corr.bar(x_pos_c, mean_corr, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
                                     alpha=0.8, edgecolor='black', linewidth=0.8)
                 
+                # Add significance annotations
+                add_significance_annotations(ax_corr, {m: corr_results_raw[m] for m in valid_methods_c}, mean_corr)
+                
                 ax_corr.set_xlabel('Method')
-                ax_corr.set_ylabel('Beta Difference')
-                ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)', fontweight='bold')
+                ax_corr.set_ylabel('Correlation (r)')
+                ax_corr.set_title('Correlation vs Truth (FDR<0.05)', fontweight='bold')
                 ax_corr.set_xticks(x_pos_c)
                 ax_corr.set_xticklabels(valid_methods_c, rotation=45, ha='right')
                 ax_corr.grid(True, alpha=0.3, axis='y')
+                
+                # Adjust y-axis to accommodate significance annotations
+                ax_corr.set_ylim(0, min(1.0, max(mean_corr) * 1.4))
         else:
-            ax_corr.text(0.5, 0.5, 'No effect size difference data available', transform=ax_corr.transAxes, ha='center', va='center')
-            ax_corr.set_title('Effect Size Difference vs Truth (FDR<0.05)')
+            ax_corr.text(0.5, 0.5, 'No correlation data available', transform=ax_corr.transAxes, ha='center', va='center')
+            ax_corr.set_title('Correlation vs Truth (FDR<0.05)')
+        
+        # R-squared panel - bar plot with significance tests
+        if r2_results_raw:
+            methods_r2 = list(r2_results_raw.keys())
+            valid_methods_r2 = [m for m in methods_r2 if len(r2_results_raw[m]) > 0]
+            
+            if valid_methods_r2:
+                # Calculate mean R-squared for each method
+                mean_r2 = [np.mean(r2_results_raw[m]) for m in valid_methods_r2]
+                
+                # Create bar plot
+                x_pos_r2 = np.arange(len(valid_methods_r2))
+                bars_r2 = ax_r2.bar(x_pos_r2, mean_r2, color=[colors[i % len(colors)] for i in range(len(valid_methods_r2))], 
+                                   alpha=0.8, edgecolor='black', linewidth=0.8)
+                
+                # Add significance annotations
+                add_significance_annotations(ax_r2, {m: r2_results_raw[m] for m in valid_methods_r2}, mean_r2)
+                
+                ax_r2.set_xlabel('Method')
+                ax_r2.set_ylabel('R-squared')
+                ax_r2.set_title('R² vs Truth (FDR<0.05)', fontweight='bold')
+                ax_r2.set_xticks(x_pos_r2)
+                ax_r2.set_xticklabels(valid_methods_r2, rotation=45, ha='right')
+                ax_r2.grid(True, alpha=0.3, axis='y')
+                
+                # Adjust y-axis to accommodate significance annotations
+                ax_r2.set_ylim(0, min(1.0, max(mean_r2) * 1.4))
+        else:
+            ax_r2.text(0.5, 0.5, 'No R-squared data available', transform=ax_r2.transAxes, ha='center', va='center')
+            ax_r2.set_title('R² vs Truth (FDR<0.05)')
         
         # Make panels square without distorting data aspect
         ax_mae.set_box_aspect(1)
         ax_corr.set_box_aspect(1)
+        ax_r2.set_box_aspect(1)
         
-        plt.tight_layout(rect=[0, 0, 1, 0.92])
+        # Add legend for significance levels
+        fig.text(0.5, 0.01, '* p<0.05, ** p<0.01, *** p<0.001, ns: not significant', 
+                ha='center', fontsize=9, style='italic')
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 0.92])
         return fig
     
     def generate_figure_28c_significance_contingency_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
@@ -1787,7 +2724,7 @@ class ComparativeAnalyzer:
         
         print("Generating Figure 28c: Binary phenotype significance contingency matrix...")
         
-        # Get all available methods
+        # Get all available methods (excluding Method4/permuted)
         all_methods = ['Truth']
         if data.method1_name:
             all_methods.append(data.method1_name)
@@ -1795,8 +2732,7 @@ class ComparativeAnalyzer:
             all_methods.append(data.method2_name)
         if data.method3_name:
             all_methods.append(data.method3_name)
-        if data.method4_name:
-            all_methods.append(data.method4_name)
+        # Exclude Method4 (permuted data) from contingency analysis
         
         # Initialize contingency matrix for each phenotype
         contingency_matrices = {}
@@ -1910,7 +2846,7 @@ class ComparativeAnalyzer:
         
         print("Generating Figure 29c: Continuous phenotype significance contingency matrix...")
         
-        # Get all available methods
+        # Get all available methods (excluding Method4/permuted)
         all_methods = ['Truth']
         if data.method1_name:
             all_methods.append(data.method1_name)
@@ -1918,8 +2854,7 @@ class ComparativeAnalyzer:
             all_methods.append(data.method2_name)
         if data.method3_name:
             all_methods.append(data.method3_name)
-        if data.method4_name:
-            all_methods.append(data.method4_name)
+        # Exclude Method4 (permuted data) from contingency analysis
         
         # Initialize contingency matrix for each phenotype
         contingency_matrices = {}
@@ -2024,7 +2959,399 @@ class ComparativeAnalyzer:
         
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         return fig
-
+    
+    def generate_figure_30_all_phenotypes_retention(self, data: AnalysisData):
+        """Figure 30: Retention analysis of significant associations for ALL phenotypes.
+        
+        This figure analyzes ALL phenotypes in the dataset (not just user-specified ones) and shows:
+        - Top row: Scatter plots showing retention for binary and continuous phenotypes separately
+        - Bottom row: Bar plots showing recovery rates by binned association counts
+        - Each point/bar represents phenotype-method combinations
+        """
+        if data.phenotype_data is None:
+            print("  No phenotype data available for figure 30")
+            return None
+            
+        print("Generating Figure 30: All phenotypes association retention analysis...")
+        
+        # Store the full phenotype data if available, or use the filtered version
+        if hasattr(data, 'phenotype_data_full') and data.phenotype_data_full is not None:
+            # Use full unfiltered phenotype data
+            full_phenotype_data = data.phenotype_data_full
+        else:
+            # Fallback to filtered data (for backward compatibility)
+            full_phenotype_data = data.phenotype_data
+            
+        # Temporarily swap the phenotype data to use full data for all-phenotype analysis
+        original_phenotype_data = data.phenotype_data
+        data.phenotype_data = full_phenotype_data
+        
+        # Show how many phenotypes are available
+        print(f"  Total columns in phenotype data: {full_phenotype_data.shape[1]}")
+        
+        # Calculate associations for ALL phenotypes
+        all_binary_results = self.calculate_all_binary_associations(data)
+        all_continuous_results = self.calculate_all_continuous_associations(data)
+        
+        # Restore original phenotype data
+        data.phenotype_data = original_phenotype_data
+        
+        if not all_binary_results and not all_continuous_results:
+            print("  No phenotype associations found")
+            return None
+        
+        # Prepare data for plots with phenotype type tracking
+        scatter_data = []
+        
+        # Process binary phenotypes
+        for phenotype, results_df in all_binary_results.items():
+            # Get truth results and apply FDR correction
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+                
+            _, pvals_corrected, _, _ = multipletests(
+                truth_results['p_value'].fillna(1), 
+                method='fdr_bh', 
+                alpha=0.05
+            )
+            truth_results['p_adj'] = pvals_corrected
+            
+            # Get significant features in truth
+            sig_truth_features = set(truth_results[truth_results['p_adj'] < 0.05]['feature'].tolist())
+            n_truth_sig = len(sig_truth_features)
+            
+            if n_truth_sig == 0:
+                continue  # Skip phenotypes with no significant associations
+            
+            # For each imputation method, count retained associations
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                    
+                method_results = results_df[results_df['method'] == method].copy()
+                if len(method_results) == 0:
+                    continue
+                
+                # Apply FDR correction to method results
+                _, pvals_corrected_method, _, _ = multipletests(
+                    method_results['p_value'].fillna(1), 
+                    method='fdr_bh', 
+                    alpha=0.05
+                )
+                method_results['p_adj'] = pvals_corrected_method
+                
+                # Get significant features in this method
+                sig_method_features = set(method_results[method_results['p_adj'] < 0.05]['feature'].tolist())
+                
+                # Count how many truth associations are retained
+                n_retained = len(sig_truth_features & sig_method_features)
+                
+                # Also count new discoveries (significant in method but not in truth)
+                n_new = len(sig_method_features - sig_truth_features)
+                
+                scatter_data.append({
+                    'phenotype': phenotype,
+                    'phenotype_type': 'binary',
+                    'method': method,
+                    'n_truth_sig': n_truth_sig,
+                    'n_retained': n_retained,
+                    'n_new': n_new,
+                    'retention_rate': n_retained / n_truth_sig if n_truth_sig > 0 else 0
+                })
+        
+        # Process continuous phenotypes
+        for phenotype, results_df in all_continuous_results.items():
+            # Get truth results and apply FDR correction
+            truth_results = results_df[results_df['method'] == 'Truth'].copy()
+            if len(truth_results) == 0:
+                continue
+                
+            _, pvals_corrected, _, _ = multipletests(
+                truth_results['p_value'].fillna(1), 
+                method='fdr_bh', 
+                alpha=0.05
+            )
+            truth_results['p_adj'] = pvals_corrected
+            
+            # Get significant features in truth
+            sig_truth_features = set(truth_results[truth_results['p_adj'] < 0.05]['feature'].tolist())
+            n_truth_sig = len(sig_truth_features)
+            
+            if n_truth_sig == 0:
+                continue  # Skip phenotypes with no significant associations
+            
+            # For each imputation method, count retained associations
+            for method in results_df['method'].unique():
+                if method == 'Truth':
+                    continue
+                    
+                method_results = results_df[results_df['method'] == method].copy()
+                if len(method_results) == 0:
+                    continue
+                
+                # Apply FDR correction to method results
+                _, pvals_corrected_method, _, _ = multipletests(
+                    method_results['p_value'].fillna(1), 
+                    method='fdr_bh', 
+                    alpha=0.05
+                )
+                method_results['p_adj'] = pvals_corrected_method
+                
+                # Get significant features in this method
+                sig_method_features = set(method_results[method_results['p_adj'] < 0.05]['feature'].tolist())
+                
+                # Count how many truth associations are retained
+                n_retained = len(sig_truth_features & sig_method_features)
+                
+                # Also count new discoveries (significant in method but not in truth)
+                n_new = len(sig_method_features - sig_truth_features)
+                
+                scatter_data.append({
+                    'phenotype': phenotype,
+                    'phenotype_type': 'continuous',
+                    'method': method,
+                    'n_truth_sig': n_truth_sig,
+                    'n_retained': n_retained,
+                    'n_new': n_new,
+                    'retention_rate': n_retained / n_truth_sig if n_truth_sig > 0 else 0
+                })
+        
+        if not scatter_data:
+            print("  No data available for scatter plot")
+            return None
+        
+        scatter_df = pd.DataFrame(scatter_data)
+        
+        # Split data by phenotype type
+        binary_df = scatter_df[scatter_df['phenotype_type'] == 'binary']
+        continuous_df = scatter_df[scatter_df['phenotype_type'] == 'continuous']
+        
+        # Create figure with 2x2 layout
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 12))
+        
+        # Top-left: Binary phenotype scatter plot
+        ax1.set_title('Binary Phenotypes: Retention of Associations', fontweight='bold', fontsize=14)
+        ax1.set_xlabel('Number of Significant Associations in Truth Data', fontsize=12)
+        ax1.set_ylabel('Number Retained in Imputed Data', fontsize=12)
+        
+        # Define colors for methods
+        method_colors = {
+            data.method1_name: NATURE_COLORS['primary'],
+            data.method2_name: NATURE_COLORS['secondary']
+        }
+        if data.method3_name:
+            method_colors[data.method3_name] = NATURE_COLORS['accent']
+        if data.method4_name:
+            method_colors[data.method4_name] = NATURE_COLORS['highlight']
+        
+        # Plot binary phenotype scatter (ax1)
+        if not binary_df.empty:
+            for method in binary_df['method'].unique():
+                method_data = binary_df[binary_df['method'] == method]
+                ax1.scatter(method_data['n_truth_sig'], 
+                           method_data['n_retained'],
+                           label=method,
+                           color=method_colors.get(method, 'gray'),
+                           alpha=0.7,
+                           s=50,
+                           edgecolor='black',
+                           linewidth=0.5)
+            
+            # Add diagonal reference line (perfect retention)
+            max_val_binary = binary_df['n_truth_sig'].max() if not binary_df.empty else 100
+            ax1.plot([0, max_val_binary], [0, max_val_binary], 'k--', alpha=0.3, label='Perfect Retention')
+            ax1.plot([0, max_val_binary], [0, max_val_binary*0.5], 'k:', alpha=0.3, label='50% Retention')
+            
+            ax1.legend(loc='upper left', fontsize=10)
+            ax1.grid(True, alpha=0.3)
+            ax1.set_xlim(left=-1)
+            ax1.set_ylim(bottom=-1)
+            ax1.set_aspect('equal', 'box')
+        else:
+            ax1.text(0.5, 0.5, 'No binary phenotype data', ha='center', va='center', transform=ax1.transAxes)
+        
+        # Top-right: Continuous phenotype scatter plot
+        ax2.set_title('Continuous Phenotypes: Retention of Associations', fontweight='bold', fontsize=14)
+        ax2.set_xlabel('Number of Significant Associations in Truth Data', fontsize=12)
+        ax2.set_ylabel('Number Retained in Imputed Data', fontsize=12)
+        
+        if not continuous_df.empty:
+            for method in continuous_df['method'].unique():
+                method_data = continuous_df[continuous_df['method'] == method]
+                ax2.scatter(method_data['n_truth_sig'], 
+                           method_data['n_retained'],
+                           label=method,
+                           color=method_colors.get(method, 'gray'),
+                           alpha=0.7,
+                           s=50,
+                           edgecolor='black',
+                           linewidth=0.5)
+            
+            # Add diagonal reference line (perfect retention)
+            max_val_cont = continuous_df['n_truth_sig'].max() if not continuous_df.empty else 100
+            ax2.plot([0, max_val_cont], [0, max_val_cont], 'k--', alpha=0.3, label='Perfect Retention')
+            ax2.plot([0, max_val_cont], [0, max_val_cont*0.5], 'k:', alpha=0.3, label='50% Retention')
+            
+            ax2.legend(loc='upper left', fontsize=10)
+            ax2.grid(True, alpha=0.3)
+            ax2.set_xlim(left=-1)
+            ax2.set_ylim(bottom=-1)
+            ax2.set_aspect('equal', 'box')
+        else:
+            ax2.text(0.5, 0.5, 'No continuous phenotype data', ha='center', va='center', transform=ax2.transAxes)
+        
+        # Bottom-left: Binary phenotype bar plot (overall recovery rates by bins)
+        ax3.set_title('Binary Phenotypes: Overall Recovery Rate by Association Count', fontweight='bold', fontsize=14)
+        ax3.set_xlabel('Number of Significant Associations in Truth Data (binned)', fontsize=12)
+        ax3.set_ylabel('Overall Recovery Rate (%)', fontsize=12)
+        
+        # Define bins for x-axis
+        bins = [0, 20, 40, np.inf]
+        bin_labels = ['1-20', '21-40', '41+']
+        
+        if not binary_df.empty:
+            # Bin the data
+            binary_df['bin'] = pd.cut(binary_df['n_truth_sig'], bins=bins, 
+                                      labels=bin_labels, include_lowest=True)
+            
+            # Calculate overall recovery rate per bin per method
+            bin_summary = binary_df.groupby(['bin', 'method']).agg({
+                'n_retained': 'sum',  # Total retained hits in imputed data
+                'n_truth_sig': 'sum'  # Total hits in truth data
+            }).reset_index()
+            # Calculate overall recovery rate (not average)
+            bin_summary['overall_recovery_rate'] = (bin_summary['n_retained'] / bin_summary['n_truth_sig']) * 100
+            # Count total number of associations (not unique phenotypes) in each bin
+            bin_summary['n_associations'] = binary_df.groupby(['bin', 'method']).size().values
+            
+            # Plot grouped bars - only imputed methods
+            all_methods = sorted(binary_df['method'].unique())
+            # Only use first two methods (method1 and method2)
+            methods_to_plot = [data.method1_name, data.method2_name]
+            methods = [m for m in methods_to_plot if m in all_methods]
+            
+            x = np.arange(len(bin_labels))
+            width = 0.35  # Width for 2 bars
+            
+            # Plot imputed methods
+            for i, method in enumerate(methods):
+                method_data = bin_summary[bin_summary['method'] == method]
+                # Ensure all bins are represented
+                recovery_rates = []
+                n_associations = []
+                for bin_label in bin_labels:
+                    bin_data = method_data[method_data['bin'] == bin_label]
+                    if not bin_data.empty:
+                        recovery_rates.append(bin_data['overall_recovery_rate'].values[0])
+                        n_associations.append(bin_data['n_associations'].values[0])
+                    else:
+                        recovery_rates.append(0)
+                        n_associations.append(0)
+                
+                bars = ax3.bar(x + i * width - width/2, recovery_rates, width, 
+                              label=method, color=method_colors.get(method, 'gray'), alpha=0.8)
+                
+                # Add n annotations (number of associations, not phenotypes)
+                for j, (bar, n_assoc) in enumerate(zip(bars, n_associations)):
+                    if n_assoc > 0:
+                        height = bar.get_height()
+                        ax3.text(bar.get_x() + bar.get_width()/2., height + 1,
+                                f'n={n_assoc}', ha='center', va='bottom', fontsize=8)
+            
+            ax3.set_xticks(x)
+            ax3.set_xticklabels(bin_labels)
+            ax3.legend(loc='upper right', fontsize=10)
+            ax3.grid(True, alpha=0.3, axis='y')
+            ax3.set_ylim(0, 105)
+        else:
+            ax3.text(0.5, 0.5, 'No binary phenotype data', ha='center', va='center', transform=ax3.transAxes)
+        
+        # Bottom-right: Continuous phenotype bar plot (overall recovery rates by bins)
+        ax4.set_title('Continuous Phenotypes: Overall Recovery Rate by Association Count', fontweight='bold', fontsize=14)
+        ax4.set_xlabel('Number of Significant Associations in Truth Data (binned)', fontsize=12)
+        ax4.set_ylabel('Overall Recovery Rate (%)', fontsize=12)
+        
+        if not continuous_df.empty:
+            # Bin the data
+            continuous_df['bin'] = pd.cut(continuous_df['n_truth_sig'], bins=bins, 
+                                          labels=bin_labels, include_lowest=True)
+            
+            # Calculate overall recovery rate per bin per method
+            bin_summary_cont = continuous_df.groupby(['bin', 'method']).agg({
+                'n_retained': 'sum',  # Total retained hits in imputed data
+                'n_truth_sig': 'sum'  # Total hits in truth data
+            }).reset_index()
+            # Calculate overall recovery rate (not average)
+            bin_summary_cont['overall_recovery_rate'] = (bin_summary_cont['n_retained'] / bin_summary_cont['n_truth_sig']) * 100
+            # Count total number of associations (not unique phenotypes) in each bin
+            bin_summary_cont['n_associations'] = continuous_df.groupby(['bin', 'method']).size().values
+            
+            # Plot grouped bars - only imputed methods
+            all_methods_cont = sorted(continuous_df['method'].unique())
+            # Only use first two methods (method1 and method2)
+            methods_to_plot_cont = [data.method1_name, data.method2_name]
+            methods_cont = [m for m in methods_to_plot_cont if m in all_methods_cont]
+            
+            x = np.arange(len(bin_labels))
+            width = 0.35  # Width for 2 bars
+            
+            # Plot imputed methods
+            for i, method in enumerate(methods_cont):
+                method_data = bin_summary_cont[bin_summary_cont['method'] == method]
+                # Ensure all bins are represented
+                recovery_rates = []
+                n_associations = []
+                for bin_label in bin_labels:
+                    bin_data = method_data[method_data['bin'] == bin_label]
+                    if not bin_data.empty:
+                        recovery_rates.append(bin_data['overall_recovery_rate'].values[0])
+                        n_associations.append(bin_data['n_associations'].values[0])
+                    else:
+                        recovery_rates.append(0)
+                        n_associations.append(0)
+                
+                bars = ax4.bar(x + i * width - width/2, recovery_rates, width, 
+                              label=method, color=method_colors.get(method, 'gray'), alpha=0.8)
+                
+                # Add n annotations (number of associations, not phenotypes)
+                for j, (bar, n_assoc) in enumerate(zip(bars, n_associations)):
+                    if n_assoc > 0:
+                        height = bar.get_height()
+                        ax4.text(bar.get_x() + bar.get_width()/2., height + 1,
+                                f'n={n_assoc}', ha='center', va='bottom', fontsize=8)
+            
+            ax4.set_xticks(x)
+            ax4.set_xticklabels(bin_labels)
+            ax4.legend(loc='upper right', fontsize=10)
+            ax4.grid(True, alpha=0.3, axis='y')
+            ax4.set_ylim(0, 105)
+        else:
+            ax4.text(0.5, 0.5, 'No continuous phenotype data', ha='center', va='center', transform=ax4.transAxes)
+        
+        fig.suptitle('Association Discovery and Retention Analysis Across All Phenotypes', 
+                    fontsize=16, fontweight='bold')
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        
+        # Print summary statistics
+        print(f"\n  Figure 30 Summary:")
+        print(f"    Total phenotypes analyzed: {scatter_df['phenotype'].nunique()}")
+        print(f"    Binary phenotypes: {binary_df['phenotype'].nunique() if not binary_df.empty else 0}")
+        print(f"    Continuous phenotypes: {continuous_df['phenotype'].nunique() if not continuous_df.empty else 0}")
+        
+        # Print statistics by phenotype type
+        for pheno_type, type_df in [('Binary', binary_df), ('Continuous', continuous_df)]:
+            if not type_df.empty:
+                print(f"\n  {pheno_type} Phenotypes:")
+                for method in type_df['method'].unique():
+                    method_data = type_df[type_df['method'] == method]
+                    print(f"    {method}:")
+                    print(f"      Mean retention rate: {method_data['retention_rate'].mean():.1%}")
+                    print(f"      Median retention rate: {method_data['retention_rate'].median():.1%}")
+        
+        return fig
+        
     def generate_figure_28_phenotype_forest_plots_binary(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
         """Figure 28: Forest plots for binary phenotype associations (forest plots only)"""
         if not association_results:
@@ -2440,9 +3767,25 @@ class ComparativeAnalyzer:
             
             # Add correlation coefficient
             spearman_r, spearman_p = spearmanr(m1_r, m2_r)
-            ax_main.text(0.05, 0.95, f'ρ = {spearman_r:.3f}', 
+            
+            # Add binomial test
+            n_m1_better = np.sum(m1_r > m2_r)
+            n_total = len(m1_r)
+            binom_result = binomtest(n_m1_better, n_total, p=0.5, alternative='two-sided')
+            binom_p = binom_result.pvalue
+            
+            # Format p-value text
+            if binom_p < 0.001:
+                binom_text = 'Binomial test p < 0.001'
+            else:
+                binom_text = f'Binomial test p = {binom_p:.3f}'
+            
+            # Display both statistics
+            stats_text = f'ρ = {spearman_r:.3f}\n{binom_text}'
+            ax_main.text(0.05, 0.95, stats_text, 
                         transform=ax_main.transAxes, fontsize=10, 
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                        verticalalignment='top')
             
             # Top marginal (Method 2 on X-axis)
             ax_top.hist(m2_r, bins=30, alpha=0.7, color=NATURE_COLORS['secondary'], density=True)
@@ -2565,9 +3908,25 @@ class ComparativeAnalyzer:
             
             # Add correlation coefficient
             spearman_r, spearman_p = spearmanr(m1_r, m2_r)
-            ax_main.text(0.05, 0.95, f'ρ = {spearman_r:.3f}', 
+            
+            # Add binomial test
+            n_m1_better = np.sum(m1_r > m2_r)
+            n_total = len(m1_r)
+            binom_result = binomtest(n_m1_better, n_total, p=0.5, alternative='two-sided')
+            binom_p = binom_result.pvalue
+            
+            # Format p-value text
+            if binom_p < 0.001:
+                binom_text = 'Binomial test p < 0.001'
+            else:
+                binom_text = f'Binomial test p = {binom_p:.3f}'
+            
+            # Display both statistics
+            stats_text = f'ρ = {spearman_r:.3f}\n{binom_text}'
+            ax_main.text(0.05, 0.95, stats_text, 
                         transform=ax_main.transAxes, fontsize=10, 
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                        verticalalignment='top')
             
             # Top marginal (Method 2 on X-axis)
             ax_top.hist(m2_r, bins=30, alpha=0.7, color=NATURE_COLORS['secondary'], 
@@ -5842,7 +7201,6 @@ class ComparativeAnalyzer:
         print("  Calculating phenotype associations...")
         phenotype_figures = []
         
-        # Calculate binary phenotype associations
         binary_results = {}
         if data.binary_pheno_cols:
             binary_results = self.calculate_binary_associations(data)
@@ -5851,7 +7209,6 @@ class ComparativeAnalyzer:
             for phenotype, results_df in binary_results.items():
                 results_df.to_csv(self.output_dir / "data" / f"binary_associations_{phenotype}.csv", index=False)
         
-        # Calculate continuous phenotype associations  
         continuous_results = {}
         if data.continuous_pheno_cols:
             continuous_results = self.calculate_continuous_associations(data)
@@ -5859,20 +7216,14 @@ class ComparativeAnalyzer:
             # Save association results
             for phenotype, results_df in continuous_results.items():
                 results_df.to_csv(self.output_dir / "data" / f"continuous_associations_{phenotype}.csv", index=False)
-        
-        # Generate forest plots
         if binary_results:
             try:
+                # Figure 28 and 28c use user-specified phenotypes
                 fig28 = self.generate_figure_28_phenotype_forest_plots_binary(data, binary_results)
                 if fig28 is not None:
                     self.save_figure(fig28, "figure_28_phenotype_forest_plots_binary")
                     plt.close(fig28)
                     phenotype_figures.append("figure_28_phenotype_forest_plots_binary")
-                fig28b = self.generate_figure_28b_phenotype_summary_binary(data, binary_results)
-                if fig28b is not None:
-                    self.save_figure(fig28b, "figure_28b_phenotype_summary_binary")
-                    plt.close(fig28b)
-                    phenotype_figures.append("figure_28b_phenotype_summary_binary")
                 fig28c = self.generate_figure_28c_significance_contingency_binary(data, binary_results)
                 if fig28c is not None:
                     self.save_figure(fig28c, "figure_28c_significance_contingency_binary")
@@ -5881,18 +7232,25 @@ class ComparativeAnalyzer:
             except Exception as e:
                 print(f"    Error generating figure 28: {str(e)}")
         
+        # ALWAYS generate figure 28b with ALL phenotypes (regardless of user specification)
+        try:
+            print("  Generating Figure 28b with ALL binary phenotypes...")
+            fig28b = self.generate_figure_28b_phenotype_summary_binary(data, {})  # Pass empty dict to trigger ALL phenotypes
+            if fig28b is not None:
+                self.save_figure(fig28b, "figure_28b_phenotype_summary_binary_all")
+                plt.close(fig28b)
+                phenotype_figures.append("figure_28b_phenotype_summary_binary_all")
+        except Exception as e:
+            print(f"    Error generating figure 28b: {str(e)}")
+        
         if continuous_results:
             try:
+                # Figure 29 and 29c use user-specified phenotypes
                 fig29 = self.generate_figure_29_phenotype_forest_plots_continuous(data, continuous_results)
                 if fig29 is not None:
                     self.save_figure(fig29, "figure_29_phenotype_forest_plots_continuous")
                     plt.close(fig29)
                     phenotype_figures.append("figure_29_phenotype_forest_plots_continuous")
-                fig29b = self.generate_figure_29b_phenotype_summary_continuous(data, continuous_results)
-                if fig29b is not None:
-                    self.save_figure(fig29b, "figure_29b_phenotype_summary_continuous")
-                    plt.close(fig29b)
-                    phenotype_figures.append("figure_29b_phenotype_summary_continuous")
                 fig29c = self.generate_figure_29c_significance_contingency_continuous(data, continuous_results)
                 if fig29c is not None:
                     self.save_figure(fig29c, "figure_29c_significance_contingency_continuous")
@@ -5900,6 +7258,29 @@ class ComparativeAnalyzer:
                     phenotype_figures.append("figure_29c_significance_contingency_continuous")
             except Exception as e:
                 print(f"    Error generating figure 29: {str(e)}")
+        
+        # ALWAYS generate figure 29b with ALL phenotypes (regardless of user specification)
+        try:
+            print("  Generating Figure 29b with ALL continuous phenotypes...")
+            fig29b = self.generate_figure_29b_phenotype_summary_continuous(data, {})  # Pass empty dict to trigger ALL phenotypes
+            if fig29b is not None:
+                self.save_figure(fig29b, "figure_29b_phenotype_summary_continuous_all")
+                plt.close(fig29b)
+                phenotype_figures.append("figure_29b_phenotype_summary_continuous_all")
+        except Exception as e:
+            print(f"    Error generating figure 29b: {str(e)}")
+        
+        # Generate Figure 30: All phenotypes retention analysis (always generated when phenotype data exists)
+        try:
+            print("\n  Generating comprehensive phenotype analysis (Figure 30)...")
+            fig30 = self.generate_figure_30_all_phenotypes_retention(data)
+            if fig30 is not None:
+                self.save_figure(fig30, "figure_30_all_phenotypes_retention")
+                plt.close(fig30)
+                phenotype_figures.append("figure_30_all_phenotypes_retention")
+                print("    Figure 30 generated successfully")
+        except Exception as e:
+            print(f"    Error generating figure 30: {str(e)}")
         
         print(f"  Generated {len(phenotype_figures)} phenotype-dependent figures")
         return phenotype_figures

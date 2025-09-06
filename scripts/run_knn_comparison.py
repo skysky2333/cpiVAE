@@ -75,10 +75,17 @@ def parse_arguments():
         help='Kernel/weighting function for KNN (default: distance)'
     )
     parser.add_argument(
+        '--bandwidth_values', 
+        type=float,
+        nargs='+',
+        default=None,
+        help='List of bandwidth values to test for advanced kernels (default: automatic range based on kernel)'
+    )
+    parser.add_argument(
         '--bandwidth', 
         type=float, 
-        default=1.0,
-        help='Bandwidth parameter for advanced kernels (default: 1.0)'
+        default=None,
+        help='Single bandwidth value (deprecated, use --bandwidth_values instead)'
     )
     parser.add_argument(
         '--polynomial_degree', 
@@ -119,7 +126,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def run_knn_experiment(platform_a, platform_b, output_dir, k_value, cv_folds=None, kernel='distance', bandwidth=1.0, polynomial_degree=2, log_transform_a=False, log_transform_b=False, log_epsilon=1e-8):
+def run_knn_experiment(platform_a, platform_b, output_dir, k_value, bandwidth_value, cv_folds=None, kernel='distance', polynomial_degree=2, log_transform_a=False, log_transform_b=False, log_epsilon=1e-8):
     """Execute a single KNN experiment with specified parameters.
     
     Args:
@@ -127,9 +134,9 @@ def run_knn_experiment(platform_a, platform_b, output_dir, k_value, cv_folds=Non
         platform_b (str): Path to platform B data file
         output_dir (str): Directory to save experiment results
         k_value (int): Number of neighbors for KNN
+        bandwidth_value (float): Bandwidth parameter for advanced kernels
         cv_folds (int, optional): Number of cross-validation folds
         kernel (str): Kernel function type for weighting neighbors
-        bandwidth (float): Bandwidth parameter for advanced kernels
         polynomial_degree (int): Degree for polynomial kernel
         log_transform_a (bool): Whether to log-transform platform A data
         log_transform_b (bool): Whether to log-transform platform B data
@@ -138,12 +145,24 @@ def run_knn_experiment(platform_a, platform_b, output_dir, k_value, cv_folds=Non
     Returns:
         tuple: (success_status, experiment_directory_path)
     """
-    if cv_folds and cv_folds > 0:
-        print(f"Running KNN experiment with k={k_value}, {cv_folds}-fold CV, kernel={kernel}...")
-    else:
-        print(f"Running KNN experiment with k={k_value}, train/test split, kernel={kernel}...")
+    # Determine if bandwidth is relevant for this kernel
+    uses_bandwidth = kernel in ['gaussian', 'exponential', 'tricube', 'epanechnikov', 'polynomial']
     
-    exp_output_dir = Path(output_dir) / f'k_{k_value}'
+    if cv_folds and cv_folds > 0:
+        if uses_bandwidth:
+            print(f"Running KNN experiment with k={k_value}, bandwidth={bandwidth_value}, {cv_folds}-fold CV, kernel={kernel}...")
+        else:
+            print(f"Running KNN experiment with k={k_value}, {cv_folds}-fold CV, kernel={kernel}...")
+    else:
+        if uses_bandwidth:
+            print(f"Running KNN experiment with k={k_value}, bandwidth={bandwidth_value}, train/test split, kernel={kernel}...")
+        else:
+            print(f"Running KNN experiment with k={k_value}, train/test split, kernel={kernel}...")
+    
+    if uses_bandwidth:
+        exp_output_dir = Path(output_dir) / f'k_{k_value}_bw_{bandwidth_value}'
+    else:
+        exp_output_dir = Path(output_dir) / f'k_{k_value}'
     cmd = [
         'python', 'scripts/knn_baseline.py',
         '--platform_a', platform_a,
@@ -151,7 +170,7 @@ def run_knn_experiment(platform_a, platform_b, output_dir, k_value, cv_folds=Non
         '--output_dir', str(exp_output_dir),
         '--n_neighbors', str(k_value),
         '--kernel', kernel,
-        '--bandwidth', str(bandwidth),
+        '--bandwidth', str(bandwidth_value),
         '--polynomial_degree', str(polynomial_degree),
         '--log_epsilon', str(log_epsilon)
     ]
@@ -175,12 +194,12 @@ def run_knn_experiment(platform_a, platform_b, output_dir, k_value, cv_folds=Non
         return False, None
 
 
-def collect_results(output_dir, k_values, is_cv=False):
+def collect_results(output_dir, experiment_configs, is_cv=False):
     """Aggregate results from all completed KNN experiments.
     
     Args:
         output_dir (str): Directory containing experiment results
-        k_values (list): List of k values that were tested
+        experiment_configs (list): List of (k, bandwidth) tuples that were tested
         is_cv (bool): Whether cross-validation was used
     
     Returns:
@@ -188,8 +207,15 @@ def collect_results(output_dir, k_values, is_cv=False):
     """
     results = []
     
-    for k in k_values:
-        exp_dir = Path(output_dir) / f'k_{k}'
+    for config in experiment_configs:
+        if isinstance(config, tuple):
+            k, bandwidth = config
+            exp_dir = Path(output_dir) / f'k_{k}_bw_{bandwidth}'
+        else:
+            # Backward compatibility for k-only experiments
+            k = config
+            bandwidth = None
+            exp_dir = Path(output_dir) / f'k_{k}'
         
         if is_cv:
             summary_file = exp_dir / 'knn_baseline_cv_summary.csv'
@@ -199,9 +225,14 @@ def collect_results(output_dir, k_values, is_cv=False):
         if summary_file.exists():
             summary = pd.read_csv(summary_file)
             summary['k_value'] = k
+            if bandwidth is not None:
+                summary['bandwidth'] = bandwidth
             results.append(summary)
         else:
-            print(f"Warning: Results for k={k} not found")
+            if bandwidth is not None:
+                print(f"Warning: Results for k={k}, bandwidth={bandwidth} not found")
+            else:
+                print(f"Warning: Results for k={k} not found")
     
     if results:
         combined_results = pd.concat(results, ignore_index=True)
@@ -232,6 +263,9 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
         results_df.to_csv(output_path / 'knn_comparison_cv_summary.csv', index=False)
     else:
         results_df.to_csv(output_path / 'knn_comparison_summary.csv', index=False)
+    
+    # Check if bandwidth column exists (for advanced kernels)
+    has_bandwidth = 'bandwidth' in results_df.columns
     
     if is_cv:
         a_to_b_col = 'A_to_B_R2_mean'
@@ -266,8 +300,10 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
     
     report = {
         'evaluation_type': 'cross_validation' if is_cv else 'train_test_split',
+        'has_bandwidth_search': has_bandwidth,
         'best_a_to_b_r2': {
             'k_value': int(best_a_to_b['k_value']),
+            'bandwidth': float(best_a_to_b['bandwidth']) if has_bandwidth else None,
             'r2_score': float(best_a_to_b[a_to_b_col]),
             'correlation': float(best_a_to_b[a_to_b_corr_col]),
             'mean_feature_r2': float(best_a_to_b[a_to_b_feature_col]),
@@ -277,6 +313,7 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
         },
         'best_b_to_a_r2': {
             'k_value': int(best_b_to_a['k_value']),
+            'bandwidth': float(best_b_to_a['bandwidth']) if has_bandwidth else None,
             'r2_score': float(best_b_to_a[b_to_a_col]),
             'correlation': float(best_b_to_a[b_to_a_corr_col]),
             'mean_feature_r2': float(best_b_to_a[b_to_a_feature_col]),
@@ -286,6 +323,7 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
         },
         'best_a_to_b_correlation': {
             'k_value': int(best_a_to_b_corr['k_value']),
+            'bandwidth': float(best_a_to_b_corr['bandwidth']) if has_bandwidth else None,
             'r2_score': float(best_a_to_b_corr[a_to_b_col]),
             'correlation': float(best_a_to_b_corr[a_to_b_corr_col]),
             'mean_feature_r2': float(best_a_to_b_corr[a_to_b_feature_col]),
@@ -295,6 +333,7 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
         },
         'best_b_to_a_correlation': {
             'k_value': int(best_b_to_a_corr['k_value']),
+            'bandwidth': float(best_b_to_a_corr['bandwidth']) if has_bandwidth else None,
             'r2_score': float(best_b_to_a_corr[b_to_a_col]),
             'correlation': float(best_b_to_a_corr[b_to_a_corr_col]),
             'mean_feature_r2': float(best_b_to_a_corr[b_to_a_feature_col]),
@@ -327,6 +366,8 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
     
     print(f"\nBest A → B Performance (by R²):")
     print(f"  k = {best_a_to_b['k_value']}")
+    if has_bandwidth:
+        print(f"  bandwidth = {best_a_to_b['bandwidth']}")
     if is_cv:
         print(f"  Overall R² = {best_a_to_b[a_to_b_col]:.4f} ± {best_a_to_b['A_to_B_R2_std']:.4f}")
         print(f"  Overall Correlation = {best_a_to_b[a_to_b_corr_col]:.4f} ± {best_a_to_b['A_to_B_correlation_std']:.4f}")
@@ -344,6 +385,8 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
     
     print(f"\nBest B → A Performance (by R²):")
     print(f"  k = {best_b_to_a['k_value']}")
+    if has_bandwidth:
+        print(f"  bandwidth = {best_b_to_a['bandwidth']}")
     if is_cv:
         print(f"  Overall R² = {best_b_to_a[b_to_a_col]:.4f} ± {best_b_to_a['B_to_A_R2_std']:.4f}")
         print(f"  Overall Correlation = {best_b_to_a[b_to_a_corr_col]:.4f} ± {best_b_to_a['B_to_A_correlation_std']:.4f}")
@@ -359,30 +402,35 @@ def create_comparison_report(results_df, output_dir, is_cv=False):
         print(f"  Features with R² > 0.5 = {best_b_to_a[b_to_a_frac_col]:.2%}")
         print(f"  Features with Correlation > 0.6 = {best_b_to_a.get(b_to_a_frac_corr_col, 0.0):.2%}")
     
-    if best_a_to_b_corr['k_value'] != best_a_to_b['k_value']:
+    if best_a_to_b_corr['k_value'] != best_a_to_b['k_value'] or (has_bandwidth and best_a_to_b_corr.get('bandwidth') != best_a_to_b.get('bandwidth')):
         print(f"\nBest A → B Performance (by Correlation):")
         print(f"  k = {best_a_to_b_corr['k_value']}")
+        if has_bandwidth:
+            print(f"  bandwidth = {best_a_to_b_corr['bandwidth']}")
         print(f"  Overall Correlation = {best_a_to_b_corr[a_to_b_corr_col]:.4f}")
         print(f"  Overall R² = {best_a_to_b_corr[a_to_b_col]:.4f}")
     
-    if best_b_to_a_corr['k_value'] != best_b_to_a['k_value']:
+    if best_b_to_a_corr['k_value'] != best_b_to_a['k_value'] or (has_bandwidth and best_b_to_a_corr.get('bandwidth') != best_b_to_a.get('bandwidth')):
         print(f"\nBest B → A Performance (by Correlation):")
         print(f"  k = {best_b_to_a_corr['k_value']}")
+        if has_bandwidth:
+            print(f"  bandwidth = {best_b_to_a_corr['bandwidth']}")
         print(f"  Overall Correlation = {best_b_to_a_corr[b_to_a_corr_col]:.4f}")
         print(f"  Overall R² = {best_b_to_a_corr[b_to_a_col]:.4f}")
     
     print("\nAll Results:")
-    if is_cv:
-        print(results_df[['k_value', a_to_b_col, b_to_a_col, a_to_b_corr_col, b_to_a_corr_col]].to_string(index=False))
+    if has_bandwidth:
+        display_cols = ['k_value', 'bandwidth', a_to_b_col, b_to_a_col, a_to_b_corr_col, b_to_a_corr_col]
     else:
-        print(results_df[['k_value', a_to_b_col, b_to_a_col, a_to_b_corr_col, b_to_a_corr_col]].to_string(index=False))
+        display_cols = ['k_value', a_to_b_col, b_to_a_col, a_to_b_corr_col, b_to_a_corr_col]
+    print(results_df[display_cols].to_string(index=False))
     print("="*80)
     
     return report
 
 
-def perform_cross_imputation(platform_a, platform_b, platform_impute, impute_target, best_k, 
-                            kernel='distance', bandwidth=1.0, polynomial_degree=2,
+def perform_cross_imputation(platform_a, platform_b, platform_impute, impute_target, best_k, best_bandwidth,
+                            kernel='distance', polynomial_degree=2,
                             log_transform_a=False, log_transform_b=False, log_epsilon=1e-8,
                             output_dir=None):
     """
@@ -394,8 +442,8 @@ def perform_cross_imputation(platform_a, platform_b, platform_impute, impute_tar
         platform_impute: Path to file that needs imputation
         impute_target: 'a' or 'b' - which platform to impute as
         best_k: Best k value from comparison
+        best_bandwidth: Best bandwidth value from comparison
         kernel: Kernel type
-        bandwidth: Bandwidth parameter
         polynomial_degree: Polynomial degree
         log_transform_a: Log transform platform A
         log_transform_b: Log transform platform B
@@ -430,7 +478,7 @@ def perform_cross_imputation(platform_a, platform_b, platform_impute, impute_tar
     train_a_norm = scaler_a.fit_transform(train_a)
     train_b_norm = scaler_b.fit_transform(train_b)
     
-    weights = create_kernel_function(kernel, bandwidth, polynomial_degree)
+    weights = create_kernel_function(kernel, best_bandwidth, polynomial_degree)
     
     if impute_target == 'a':
         # We want to impute platform A data, so we need B->A model
@@ -541,6 +589,20 @@ def main():
     """
     args = parse_arguments()
     
+    # Determine bandwidth values to test
+    if args.bandwidth_values is None:
+        if args.bandwidth is not None:
+            # Backward compatibility: use single bandwidth value
+            bandwidth_values = [args.bandwidth]
+        elif args.kernel in ['gaussian', 'exponential', 'tricube', 'epanechnikov', 'polynomial']:
+            # Default bandwidth search for advanced kernels
+            bandwidth_values = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+        else:
+            # No bandwidth needed for uniform/distance kernels
+            bandwidth_values = [1.0]  # Dummy value, won't be used
+    else:
+        bandwidth_values = args.bandwidth_values
+    
     if not Path(args.platform_a).exists():
         print(f"Error: Platform A file not found: {args.platform_a}")
         sys.exit(1)
@@ -566,8 +628,8 @@ def main():
         print(f"Error: cv_folds must be >= 0, got: {args.cv_folds}")
         sys.exit(1)
     
-    if args.bandwidth <= 0:
-        print(f"Error: bandwidth must be > 0, got: {args.bandwidth}")
+    if any(bw <= 0 for bw in bandwidth_values):
+        print(f"Error: all bandwidth values must be > 0, got: {bandwidth_values}")
         sys.exit(1)
     
     if args.polynomial_degree < 1:
@@ -581,8 +643,10 @@ def main():
     print(f"Platform B file: {args.platform_b}")
     print(f"Testing k values: {args.k_values}")
     print(f"Using kernel: {args.kernel}")
-    if args.kernel not in ['uniform', 'distance']:
-        print(f"Kernel parameters: bandwidth={args.bandwidth}" + (f", degree={args.polynomial_degree}" if args.kernel == 'polynomial' else ""))
+    if args.kernel in ['gaussian', 'exponential', 'tricube', 'epanechnikov', 'polynomial']:
+        print(f"Testing bandwidth values: {bandwidth_values}")
+        if args.kernel == 'polynomial':
+            print(f"Polynomial degree: {args.polynomial_degree}")
     
     if args.log_transform_a or args.log_transform_b:
         print(f"Log transformation: Platform A={'enabled' if args.log_transform_a else 'disabled'}, Platform B={'enabled' if args.log_transform_b else 'disabled'}, epsilon={args.log_epsilon}")
@@ -599,57 +663,97 @@ def main():
     print(f"Output directory: {args.output_dir}")
     
     successful_runs = []
+    experiment_configs = []
+    
+    # Determine if we need bandwidth search
+    uses_bandwidth = args.kernel in ['gaussian', 'exponential', 'tricube', 'epanechnikov', 'polynomial']
+    
     for k in args.k_values:
-        success, exp_dir = run_knn_experiment(
-            args.platform_a, args.platform_b, args.output_dir, k, 
-            args.cv_folds if use_cv else None,
-            args.kernel, args.bandwidth, args.polynomial_degree,
-            args.log_transform_a, args.log_transform_b, args.log_epsilon
-        )
-        if success:
-            successful_runs.append(k)
+        if uses_bandwidth:
+            # Grid search over both k and bandwidth
+            for bandwidth in bandwidth_values:
+                success, exp_dir = run_knn_experiment(
+                    args.platform_a, args.platform_b, args.output_dir, k, bandwidth,
+                    args.cv_folds if use_cv else None,
+                    args.kernel, args.polynomial_degree,
+                    args.log_transform_a, args.log_transform_b, args.log_epsilon
+                )
+                if success:
+                    successful_runs.append((k, bandwidth))
+                    experiment_configs.append((k, bandwidth))
+        else:
+            # Only k search for uniform/distance kernels
+            success, exp_dir = run_knn_experiment(
+                args.platform_a, args.platform_b, args.output_dir, k, 1.0,  # dummy bandwidth
+                args.cv_folds if use_cv else None,
+                args.kernel, args.polynomial_degree,
+                args.log_transform_a, args.log_transform_b, args.log_epsilon
+            )
+            if success:
+                successful_runs.append(k)
+                experiment_configs.append(k)
     
     if not successful_runs:
         print("No experiments completed successfully!")
         sys.exit(1)
     
-    print(f"\nCompleted experiments for k values: {successful_runs}")
+    if uses_bandwidth:
+        print(f"\nCompleted experiments for (k, bandwidth) pairs: {successful_runs}")
+    else:
+        print(f"\nCompleted experiments for k values: {successful_runs}")
     
     print("\nCollecting results...")
-    results_df = collect_results(args.output_dir, successful_runs, use_cv)
+    results_df = collect_results(args.output_dir, experiment_configs, use_cv)
     
     if results_df is not None:
         report = create_comparison_report(results_df, args.output_dir, use_cv)
         print(f"\nComparison completed! Results saved to: {args.output_dir}")
         
         if args.platform_impute is not None:
+            has_bandwidth = 'bandwidth' in results_df.columns
             if use_cv:
                 if args.impute_target == 'a':
                     best_k_row = results_df.loc[results_df['B_to_A_R2_mean'].idxmax()]
                     best_k = int(best_k_row['k_value'])
+                    best_bandwidth = float(best_k_row['bandwidth']) if has_bandwidth else 1.0
                     best_r2 = best_k_row['B_to_A_R2_mean']
-                    print(f"\nUsing best k={best_k} for B→A imputation (R²={best_r2:.4f})")
+                    if has_bandwidth:
+                        print(f"\nUsing best k={best_k}, bandwidth={best_bandwidth} for B→A imputation (R²={best_r2:.4f})")
+                    else:
+                        print(f"\nUsing best k={best_k} for B→A imputation (R²={best_r2:.4f})")
                 else:
                     best_k_row = results_df.loc[results_df['A_to_B_R2_mean'].idxmax()]
                     best_k = int(best_k_row['k_value'])
+                    best_bandwidth = float(best_k_row['bandwidth']) if has_bandwidth else 1.0
                     best_r2 = best_k_row['A_to_B_R2_mean']
-                    print(f"\nUsing best k={best_k} for A→B imputation (R²={best_r2:.4f})")
+                    if has_bandwidth:
+                        print(f"\nUsing best k={best_k}, bandwidth={best_bandwidth} for A→B imputation (R²={best_r2:.4f})")
+                    else:
+                        print(f"\nUsing best k={best_k} for A→B imputation (R²={best_r2:.4f})")
             else:
                 if args.impute_target == 'a':
                     best_k_row = results_df.loc[results_df['B_to_A_R2'].idxmax()]
                     best_k = int(best_k_row['k_value'])
+                    best_bandwidth = float(best_k_row['bandwidth']) if has_bandwidth else 1.0
                     best_r2 = best_k_row['B_to_A_R2']
-                    print(f"\nUsing best k={best_k} for B→A imputation (R²={best_r2:.4f})")
+                    if has_bandwidth:
+                        print(f"\nUsing best k={best_k}, bandwidth={best_bandwidth} for B→A imputation (R²={best_r2:.4f})")
+                    else:
+                        print(f"\nUsing best k={best_k} for B→A imputation (R²={best_r2:.4f})")
                 else:
                     best_k_row = results_df.loc[results_df['A_to_B_R2'].idxmax()]
                     best_k = int(best_k_row['k_value'])
+                    best_bandwidth = float(best_k_row['bandwidth']) if has_bandwidth else 1.0
                     best_r2 = best_k_row['A_to_B_R2']
-                    print(f"\nUsing best k={best_k} for A→B imputation (R²={best_r2:.4f})")
+                    if has_bandwidth:
+                        print(f"\nUsing best k={best_k}, bandwidth={best_bandwidth} for A→B imputation (R²={best_r2:.4f})")
+                    else:
+                        print(f"\nUsing best k={best_k} for A→B imputation (R²={best_r2:.4f})")
             try:
                 imputed_file = perform_cross_imputation(
                     args.platform_a, args.platform_b, args.platform_impute, 
-                    args.impute_target, best_k,
-                    args.kernel, args.bandwidth, args.polynomial_degree,
+                    args.impute_target, best_k, best_bandwidth,
+                    args.kernel, args.polynomial_degree,
                     args.log_transform_a, args.log_transform_b, args.log_epsilon,
                     args.output_dir
                 )

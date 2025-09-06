@@ -57,6 +57,7 @@ python scripts/latent_space_analysis.py \
 
 # filter ppi network with expression data
 python scripts/filter_ppi_network.py data/9606.protein.links.v12.0_converted.tsv --datasets data/olink_overlap_test.csv data/somascan_overlap_test.csv --output data/filtered_ppi_network.tsv
+python scripts/filter_ppi_network.py data/9606.protein.physical.links.v12.0_converted.tsv --datasets data/olink_overlap_test.csv data/somascan_overlap_test.csv --output data/filtered_physical_ppi_network.tsv
 
 # feature importance analysis
 python scripts/feature_importance_analysis.py \
@@ -74,7 +75,7 @@ python scripts/feature_importance_analysis.py \
     --network_type directed \
     --network_layout spring \
     --threshold_method absolute_importance \
-    --ppi_reference data/filtered_ppi_network.tsv \
+    --ppi_reference data/filtered_both_ppi_network.tsv \
     --threshold_params 0.005477
     --threshold_params 0.03 \
 
@@ -83,9 +84,9 @@ python scripts/feature_importance_analysis_correlation.py \
     --truth_b data/somascan_overlap_test.csv \
     --platform_a_name "Olink" \
     --platform_b_name "SomaScan" \
-    --ppi_reference data/filtered_ppi_network.tsv \
-    --output_dir output_comparisions_network_correlation
-
+    --ppi_reference data/filtered_both_ppi_network.tsv \
+    --output_dir output_comparisions_network_correlation \
+    --skip_cliques
 
 
 # TARGET DENSITY RECOMMENDATION (density 0.0366):

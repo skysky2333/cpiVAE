@@ -23,7 +23,7 @@ from matplotlib.gridspec import GridSpec
 import matplotlib.patches as mpatches
 
 from scipy import stats
-from scipy.stats import pearsonr, spearmanr, linregress
+from scipy.stats import pearsonr, spearmanr, linregress, binomtest
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -1684,9 +1684,25 @@ class ComparativeAnalyzer:
                 
                 # Add correlation coefficient
                 spearman_r, spearman_p = spearmanr(m1_r, m2_r)
-                ax_main.text(0.05, 0.95, f'ρ = {spearman_r:.3f}', 
+                
+                # Add binomial test
+                n_m1_better = np.sum(m1_r > m2_r)
+                n_total = len(m1_r)
+                binom_result = binomtest(n_m1_better, n_total, p=0.5, alternative='two-sided')
+                binom_p = binom_result.pvalue
+                
+                # Format p-value text
+                if binom_p < 0.001:
+                    binom_text = 'Binomial test p < 0.001'
+                else:
+                    binom_text = f'Binomial test p = {binom_p:.3f}'
+                
+                # Display both statistics
+                stats_text = f'ρ = {spearman_r:.3f}\n{binom_text}'
+                ax_main.text(0.05, 0.95, stats_text, 
                             transform=ax_main.transAxes, fontsize=10, 
-                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                            verticalalignment='top')
                 
                 # Top marginal (Method 2 now on X-axis)
                 ax_top.hist(m2_r, bins=30, alpha=0.7, color=NATURE_COLORS['secondary'], 
@@ -1823,9 +1839,25 @@ class ComparativeAnalyzer:
                 
                 # Add correlation coefficient
                 spearman_r, spearman_p = spearmanr(m1_r, m2_r)
-                ax_main.text(0.05, 0.95, f'ρ = {spearman_r:.3f}', 
+                
+                # Add binomial test
+                n_m1_better = np.sum(m1_r > m2_r)
+                n_total = len(m1_r)
+                binom_result = binomtest(n_m1_better, n_total, p=0.5, alternative='two-sided')
+                binom_p = binom_result.pvalue
+                
+                # Format p-value text
+                if binom_p < 0.001:
+                    binom_text = 'Binomial test p < 0.001'
+                else:
+                    binom_text = f'Binomial test p = {binom_p:.3f}'
+                
+                # Display both statistics
+                stats_text = f'ρ = {spearman_r:.3f}\n{binom_text}'
+                ax_main.text(0.05, 0.95, stats_text, 
                             transform=ax_main.transAxes, fontsize=10, 
-                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                            verticalalignment='top')
                 
                 # Top marginal (Method 2 now on X-axis)
                 ax_top.hist(m2_r, bins=30, alpha=0.7, color=NATURE_COLORS['secondary'], 
@@ -4111,6 +4143,8 @@ class ComparativeAnalyzer:
             ("figure_22_shared_vs_unique_performance", self.generate_figure_22_shared_vs_unique_performance),
             ("figure_23_imputation_vs_concordance", self.generate_figure_23_imputation_vs_concordance),
             ("figure_23b_imputation_vs_concordance_density", self.generate_figure_23b_imputation_vs_concordance_density),
+            ("figure_23c_imputation_concordance_difference", self.generate_figure_23c_imputation_concordance_difference),
+            ("figure_23c_percentage_increase", self.generate_figure_23c_percentage_increase),
             ("figure_24_shared_correlation_structure", self.generate_figure_24_shared_correlation_structure),
             ("figure_25_cross_platform_feature_correlation", self.generate_figure_25_cross_platform_feature_correlation),
         ]
@@ -5288,16 +5322,16 @@ class ComparativeAnalyzer:
                     # Clip negative values to 0
                     a_vals = a_vals.clip(lower=0)
                     b_vals = b_vals.clip(lower=0)
-                    try:
-                        hb = ax_feat.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7)
-                        hb_feature[i] = hb
-                    except Exception:
-                        ax_feat.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color)
                     # Set axes limits to 0-1
                     ax_feat.set_xlim(0, 1)
                     ax_feat.set_ylim(0, 1)
-                    # Plot diagonal line within 0-1 range
-                    ax_feat.plot([0, 1], [0, 1], 'r--', alpha=0.8, linewidth=2)
+                    # Plot diagonal line within 0-1 range (before hexbin so it appears underneath)
+                    ax_feat.plot([0, 1], [0, 1], 'gray', alpha=0.5, linewidth=2, zorder=1)
+                    try:
+                        hb = ax_feat.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7, zorder=2)
+                        hb_feature[i] = hb
+                    except Exception:
+                        ax_feat.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color, zorder=2)
                     try:
                         corr, _ = pearsonr(a_vals, b_vals)
                     except Exception:
@@ -5363,16 +5397,16 @@ class ComparativeAnalyzer:
                     # Clip negative values to 0
                     a_vals = a_vals.clip(lower=0)
                     b_vals = b_vals.clip(lower=0)
-                    try:
-                        hb = ax_samp.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7)
-                        hb_sample[i] = hb
-                    except Exception:
-                        ax_samp.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color)
                     # Set axes limits to 0-1
                     ax_samp.set_xlim(0, 1)
                     ax_samp.set_ylim(0, 1)
-                    # Plot diagonal line within 0-1 range
-                    ax_samp.plot([0, 1], [0, 1], 'r--', alpha=0.8, linewidth=2)
+                    # Plot diagonal line within 0-1 range (before hexbin so it appears underneath)
+                    ax_samp.plot([0, 1], [0, 1], 'gray', alpha=0.5, linewidth=2, zorder=1)
+                    try:
+                        hb = ax_samp.hexbin(a_vals, b_vals, gridsize=20, cmap='Blues', alpha=0.7, zorder=2)
+                        hb_sample[i] = hb
+                    except Exception:
+                        ax_samp.scatter(a_vals, b_vals, alpha=0.6, s=30, color=color, zorder=2)
                     try:
                         corr, _ = pearsonr(a_vals, b_vals)
                     except Exception:
@@ -6265,6 +6299,370 @@ class ComparativeAnalyzer:
                 ax.set_xlabel('Cross-Platform Concordance (r)')
                 ax.set_ylabel('Imputation Performance (r)')
                 ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        return fig
+    
+    def generate_figure_23c_imputation_concordance_difference(self, data: AnalysisData):
+        """Figure 23c: Average performance difference between methods in different concordance groups"""
+        print("Generating Figure 23c: Performance Difference by Concordance Groups...")
+        
+        # Check if we have cross-platform R² data
+        if data.cross_platform_r2 is None or len(data.cross_platform_r2) == 0:
+            return self._create_insufficient_data_figure(
+                "Performance Difference by Concordance Groups",
+                "No cross-platform R² metrics available (no overlapping features)"
+            )
+        
+        print(f"    Analyzing {len(data.cross_platform_r2)} features with cross-platform data")
+        
+        # Get cross-platform correlation (already stored as r, not R²)
+        cross_platform_r = data.cross_platform_r2.rename('cross_platform_r')
+        
+        # Merge with imputation performance metrics
+        feat_metrics = data.metrics['feature_wise'].copy()
+        merged_data = feat_metrics.merge(cross_platform_r.to_frame(), left_on='feature', right_index=True, how='inner')
+        
+        if merged_data.empty:
+            return self._create_insufficient_data_figure(
+                "Performance Difference by Concordance Groups",
+                "No metrics found for overlapping features"
+            )
+        
+        # Create concordance groups (Low: 0-0.33, Medium: 0.33-0.66, High: 0.66-1.0)
+        merged_data['concordance_group'] = pd.cut(
+            merged_data['cross_platform_r'],
+            bins=[0, 0.33, 0.66, 1.001],
+            labels=['Low\n(0.0-0.33)', 'Medium\n(0.33-0.66)', 'High\n(0.66-1.0)'],
+            include_lowest=True,
+            right=True
+        )
+        
+        # Create platform name mapping
+        platform_name_map = {
+            'Platform_A': data.platform_a_name,
+            'Platform_B': data.platform_b_name
+        }
+        
+        # Calculate average performance for each method in each concordance group
+        fig, axes = plt.subplots(2, 1, figsize=(6, 12))
+        fig.suptitle('Average Performance Difference Between Methods by Concordance Groups\n"Do concordant features show different method preferences?"', 
+                    fontsize=14, fontweight='bold')
+        
+        platforms = ['Platform_A', 'Platform_B']
+        
+        for i, platform in enumerate(platforms):
+            ax = axes[i]
+            
+            # Filter data for this platform
+            platform_data = merged_data[merged_data['platform'] == platform]
+            
+            if len(platform_data) == 0:
+                ax.text(0.5, 0.5, f'No data for {platform_name_map[platform]}', 
+                       ha='center', va='center', transform=ax.transAxes, fontsize=12)
+                ax.set_title(platform_name_map[platform])
+                continue
+            
+            # Calculate performance statistics for each concordance group
+            concordance_groups = ['Low\n(0.0-0.33)', 'Medium\n(0.33-0.66)', 'High\n(0.66-1.0)']
+            method1_means = []
+            method1_stds = []
+            method2_means = []
+            method2_stds = []
+            differences = []
+            diff_stds = []
+            group_counts = []
+            
+            for group in concordance_groups:
+                group_data = platform_data[platform_data['concordance_group'] == group]
+                
+                if len(group_data) > 0:
+                    # Get performance for each method
+                    method1_data = group_data[group_data['method'] == 'Method_1']['r']
+                    method2_data = group_data[group_data['method'] == 'Method_2']['r']
+                    
+                    # For difference calculation, we need paired data
+                    method1_by_feature = group_data[group_data['method'] == 'Method_1'].set_index('feature')['r']
+                    method2_by_feature = group_data[group_data['method'] == 'Method_2'].set_index('feature')['r']
+                    
+                    # Get features present in both methods
+                    common_features = method1_by_feature.index.intersection(method2_by_feature.index)
+                    
+                    if len(common_features) > 0:
+                        paired_method1 = method1_by_feature.loc[common_features]
+                        paired_method2 = method2_by_feature.loc[common_features]
+                        
+                        # Calculate paired differences
+                        paired_diff = paired_method1 - paired_method2
+                        
+                        method1_means.append(paired_method1.mean())
+                        method1_stds.append(paired_method1.std() / np.sqrt(len(paired_method1)))
+                        method2_means.append(paired_method2.mean())
+                        method2_stds.append(paired_method2.std() / np.sqrt(len(paired_method2)))
+                        differences.append(paired_diff.mean())
+                        diff_stds.append(paired_diff.std() / np.sqrt(len(paired_diff)))
+                        group_counts.append(len(common_features))
+                    else:
+                        method1_means.append(0)
+                        method1_stds.append(0)
+                        method2_means.append(0)
+                        method2_stds.append(0)
+                        differences.append(0)
+                        diff_stds.append(0)
+                        group_counts.append(0)
+                else:
+                    method1_means.append(0)
+                    method1_stds.append(0)
+                    method2_means.append(0)
+                    method2_stds.append(0)
+                    differences.append(0)
+                    diff_stds.append(0)
+                    group_counts.append(0)
+            
+            # Create bar plot
+            x = np.arange(len(concordance_groups))
+            width = 0.35
+            
+            # Plot bars for each method
+            bars1 = ax.bar(x - width/2, method1_means, width, yerr=method1_stds,
+                          label=data.method1_name, color=NATURE_COLORS['primary'], 
+                          capsize=5, alpha=0.8)
+            bars2 = ax.bar(x + width/2, method2_means, width, yerr=method2_stds,
+                          label=data.method2_name, color=NATURE_COLORS['secondary'], 
+                          capsize=5, alpha=0.8)
+            
+            # Add difference line plot on secondary axis
+            ax2 = ax.twinx()
+            line = ax2.plot(x, differences, 'ko-', linewidth=2, markersize=8, 
+                           label=f'Difference ({data.method1_name} - {data.method2_name})')
+            ax2.errorbar(x, differences, yerr=diff_stds, fmt='none', ecolor='black', 
+                        capsize=5, alpha=0.6)
+            ax2.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+            ax2.set_ylabel(f'Performance Difference ({data.method1_name} - {data.method2_name})', fontsize=11)
+            
+            # Add sample counts above bars
+            for j, (count, diff) in enumerate(zip(group_counts, differences)):
+                if count > 0:
+                    # Add count annotation
+                    ax.text(j, max(method1_means[j], method2_means[j]) + 0.05, 
+                           f'n={count}', ha='center', fontsize=9)
+                    
+                    # Add significance indicator if difference is substantial
+                    if abs(diff) > 0.05:  # Threshold for "substantial" difference
+                        significance = '*' if abs(diff) > 0.1 else ''
+                        ax2.text(j, diff + np.sign(diff) * 0.02, significance, 
+                                ha='center', fontsize=12, fontweight='bold')
+            
+            # Formatting
+            ax.set_xlabel('Cross-Platform Concordance Group', fontsize=11)
+            ax.set_ylabel('Average Imputation Performance (r)', fontsize=11)
+            ax.set_title(platform_name_map[platform], fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(concordance_groups)
+            ax.legend(loc='upper left')
+            ax2.legend(loc='upper right')
+            ax.grid(True, alpha=0.3, axis='y')
+            ax.set_ylim(0, 1)
+            
+            # Add interpretation text
+            if any(g > 0 for g in group_counts):
+                max_diff_idx = np.argmax(np.abs(differences))
+                if abs(differences[max_diff_idx]) > 0.05:
+                    interpretation = f"Largest difference in {concordance_groups[max_diff_idx].replace(chr(10), ' ')} concordance group"
+                    ax.text(0.02, 0.02, interpretation, transform=ax.transAxes, 
+                           fontsize=9, style='italic',
+                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
+        return fig
+    
+    def generate_figure_23c_percentage_increase(self, data: AnalysisData):
+        """Figure 23c (percentage version): Percentage increase from Method 2 to Method 1 by concordance groups"""
+        print("Generating Figure 23c (percentage): Percentage Increase by Concordance Groups...")
+        
+        # Check if we have cross-platform R² data
+        if data.cross_platform_r2 is None or len(data.cross_platform_r2) == 0:
+            return self._create_insufficient_data_figure(
+                "Percentage Increase by Concordance Groups",
+                "No cross-platform R² metrics available (no overlapping features)"
+            )
+        
+        print(f"    Analyzing {len(data.cross_platform_r2)} features with cross-platform data")
+        
+        # Get cross-platform correlation (already stored as r, not R²)
+        cross_platform_r = data.cross_platform_r2.rename('cross_platform_r')
+        
+        # Merge with imputation performance metrics
+        feat_metrics = data.metrics['feature_wise'].copy()
+        merged_data = feat_metrics.merge(cross_platform_r.to_frame(), left_on='feature', right_index=True, how='inner')
+        
+        if merged_data.empty:
+            return self._create_insufficient_data_figure(
+                "Percentage Increase by Concordance Groups",
+                "No metrics found for overlapping features"
+            )
+        
+        # Create concordance groups (Low: 0-0.33, Medium: 0.33-0.66, High: 0.66-1.0)
+        merged_data['concordance_group'] = pd.cut(
+            merged_data['cross_platform_r'],
+            bins=[0, 0.33, 0.66, 1.001],
+            labels=['Low\n(0.0-0.33)', 'Medium\n(0.33-0.66)', 'High\n(0.66-1.0)'],
+            include_lowest=True,
+            right=True
+        )
+        
+        # Create platform name mapping
+        platform_name_map = {
+            'Platform_A': data.platform_a_name,
+            'Platform_B': data.platform_b_name
+        }
+        
+        # Calculate average performance for each method in each concordance group
+        fig, axes = plt.subplots(2, 1, figsize=(6, 12))
+        fig.suptitle('Average Percentage Increase from Method 2 to Method 1 by Concordance Groups\n"Do concordant features show different relative method preferences?"', 
+                    fontsize=14, fontweight='bold')
+        
+        platforms = ['Platform_A', 'Platform_B']
+        
+        for i, platform in enumerate(platforms):
+            ax = axes[i]
+            
+            # Filter data for this platform
+            platform_data = merged_data[merged_data['platform'] == platform]
+            
+            if len(platform_data) == 0:
+                ax.text(0.5, 0.5, f'No data for {platform_name_map[platform]}', 
+                       ha='center', va='center', transform=ax.transAxes, fontsize=12)
+                ax.set_title(platform_name_map[platform])
+                continue
+            
+            # Calculate performance statistics for each concordance group
+            concordance_groups = ['Low\n(0.0-0.33)', 'Medium\n(0.33-0.66)', 'High\n(0.66-1.0)']
+            method1_means = []
+            method1_stds = []
+            method2_means = []
+            method2_stds = []
+            percentage_increases = []
+            percentage_stds = []
+            group_counts = []
+            
+            for group in concordance_groups:
+                group_data = platform_data[platform_data['concordance_group'] == group]
+                
+                if len(group_data) > 0:
+                    # Get performance for each method
+                    method1_data = group_data[group_data['method'] == 'Method_1']['r']
+                    method2_data = group_data[group_data['method'] == 'Method_2']['r']
+                    
+                    # For percentage calculation, we need paired data
+                    method1_by_feature = group_data[group_data['method'] == 'Method_1'].set_index('feature')['r']
+                    method2_by_feature = group_data[group_data['method'] == 'Method_2'].set_index('feature')['r']
+                    
+                    # Get features present in both methods
+                    common_features = method1_by_feature.index.intersection(method2_by_feature.index)
+                    
+                    if len(common_features) > 0:
+                        paired_method1 = method1_by_feature.loc[common_features]
+                        paired_method2 = method2_by_feature.loc[common_features]
+                        
+                        # Calculate percentage increase from method2 to method1
+                        # Handle cases where method2 might be 0 or very small
+                        percentage_list = []
+                        for feat in common_features:
+                            m1_val = paired_method1.loc[feat]
+                            m2_val = paired_method2.loc[feat]
+                            if m2_val > 0.01:  # Only calculate percentage if method2 performance is meaningful
+                                pct_increase = ((m1_val - m2_val) / m2_val) * 100
+                                percentage_list.append(pct_increase)
+                        
+                        if percentage_list:
+                            percentage_array = np.array(percentage_list)
+                            method1_means.append(paired_method1.mean())
+                            method1_stds.append(paired_method1.std() / np.sqrt(len(paired_method1)))
+                            method2_means.append(paired_method2.mean())
+                            method2_stds.append(paired_method2.std() / np.sqrt(len(paired_method2)))
+                            percentage_increases.append(np.mean(percentage_array))
+                            percentage_stds.append(np.std(percentage_array) / np.sqrt(len(percentage_array)))
+                            group_counts.append(len(percentage_list))
+                        else:
+                            # No valid percentage calculations possible
+                            method1_means.append(paired_method1.mean())
+                            method1_stds.append(paired_method1.std() / np.sqrt(len(paired_method1)))
+                            method2_means.append(paired_method2.mean())
+                            method2_stds.append(paired_method2.std() / np.sqrt(len(paired_method2)))
+                            percentage_increases.append(0)
+                            percentage_stds.append(0)
+                            group_counts.append(0)
+                    else:
+                        method1_means.append(0)
+                        method1_stds.append(0)
+                        method2_means.append(0)
+                        method2_stds.append(0)
+                        percentage_increases.append(0)
+                        percentage_stds.append(0)
+                        group_counts.append(0)
+                else:
+                    method1_means.append(0)
+                    method1_stds.append(0)
+                    method2_means.append(0)
+                    method2_stds.append(0)
+                    percentage_increases.append(0)
+                    percentage_stds.append(0)
+                    group_counts.append(0)
+            
+            # Create bar plot
+            x = np.arange(len(concordance_groups))
+            width = 0.35
+            
+            # Plot bars for each method
+            bars1 = ax.bar(x - width/2, method1_means, width, yerr=method1_stds,
+                          label=data.method1_name, color=NATURE_COLORS['primary'], 
+                          capsize=5, alpha=0.8)
+            bars2 = ax.bar(x + width/2, method2_means, width, yerr=method2_stds,
+                          label=data.method2_name, color=NATURE_COLORS['secondary'], 
+                          capsize=5, alpha=0.8)
+            
+            # Add percentage increase line plot on secondary axis
+            ax2 = ax.twinx()
+            line = ax2.plot(x, percentage_increases, 'ko-', linewidth=2, markersize=8, 
+                           label=f'% Increase ({data.method1_name} vs {data.method2_name})')
+            ax2.errorbar(x, percentage_increases, yerr=percentage_stds, fmt='none', ecolor='black', 
+                        capsize=5, alpha=0.6)
+            ax2.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+            ax2.set_ylabel(f'Percentage Increase (%)\n({data.method1_name} relative to {data.method2_name})', fontsize=11)
+            
+            # Add sample counts above bars
+            for j, (count, pct) in enumerate(zip(group_counts, percentage_increases)):
+                if count > 0:
+                    # Add count annotation
+                    ax.text(j, max(method1_means[j], method2_means[j]) + 0.05, 
+                           f'n={count}', ha='center', fontsize=9)
+                    
+                    # Add significance indicator if percentage increase is substantial
+                    if abs(pct) > 10:  # Threshold for "substantial" percentage difference
+                        significance = '**' if abs(pct) > 20 else '*'
+                        ax2.text(j, pct + np.sign(pct) * 2, significance, 
+                                ha='center', fontsize=12, fontweight='bold')
+            
+            # Formatting
+            ax.set_xlabel('Cross-Platform Concordance Group', fontsize=11)
+            ax.set_ylabel('Average Imputation Performance (r)', fontsize=11)
+            ax.set_title(platform_name_map[platform], fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(concordance_groups)
+            ax.legend(loc='upper left')
+            ax2.legend(loc='upper right')
+            ax.grid(True, alpha=0.3, axis='y')
+            ax.set_ylim(0, 1)
+            
+            # Add interpretation text
+            if any(g > 0 for g in group_counts):
+                max_pct_idx = np.argmax(np.abs(percentage_increases))
+                if abs(percentage_increases[max_pct_idx]) > 10:
+                    interpretation = f"Largest % increase in {concordance_groups[max_pct_idx].replace(chr(10), ' ')} concordance: {percentage_increases[max_pct_idx]:.1f}%"
+                    ax.text(0.02, 0.02, interpretation, transform=ax.transAxes, 
+                           fontsize=9, style='italic',
+                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         plt.tight_layout()
         return fig
