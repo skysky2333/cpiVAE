@@ -6,12 +6,6 @@ Compares pQTL association results from multiple imputation methods against groun
 Provides statistical analysis, performance metrics, and publication-ready visualizations
 for evaluating cross-platform proteomics imputation methods.
 
-Features:
-- Multi-level overlap analysis (associations, phenotypes, variants)
-- Effect size concordance analysis
-- Precision-recall evaluation across significance thresholds
-- Comprehensive performance ranking
-- Publication-ready figures and detailed reports
 """
 
 import argparse
@@ -128,14 +122,7 @@ class CispQTLAnalyzer:
     Provides end-to-end analysis pipeline for comparing multiple imputation
     methods against ground truth data. Includes overlap analysis, effect size
     concordance, performance ranking, and publication-ready visualizations.
-    
-    Key features:
-    - Multi-level overlap analysis (associations, phenotypes, variants)
-    - Effect size concordance with correlation and error metrics
-    - Precision-recall curves across significance thresholds
-    - Comprehensive performance ranking with weighted scoring
-    - Publication-ready figures and detailed reports
-    
+        
     Attributes:
         output_dir: Directory for saving results
         significance_threshold: P-value threshold for significance

@@ -1955,6 +1955,240 @@ class CorrelationNetworkAnalyzer:
         
         return self.save_figure(fig, "shared_cliques_between_directions")
     
+    def plot_shared_cliques_separate_networks(self, network_a_to_b: 'nx.Graph', network_b_to_a: 'nx.Graph',
+                                             platform_a_name: str, platform_b_name: str) -> plt.Figure:
+        """
+        Visualize the most overlapping cliques with separate network plots for each direction.
+        
+        Creates a 4x2 plot showing the same overlapping cliques but with separate visualizations
+        for each network direction, using circular layouts similar to other clique visualizations.
+        
+        Args:
+            network_a_to_b: Network for A→B direction
+            network_b_to_a: Network for B→A direction
+            platform_a_name: Name of platform A
+            platform_b_name: Name of platform B
+            
+        Returns:
+            Matplotlib figure with the visualization
+        """
+        if not NETWORKX_AVAILABLE or network_a_to_b is None or network_b_to_a is None:
+            print("Skipping shared cliques separate networks visualization - networks not available")
+            return None
+        
+        print(f"Generating shared cliques visualization with separate networks...")
+        
+        # Find overlapping cliques
+        overlap_data = self.find_overlapping_cliques_between_networks(
+            network_a_to_b, network_b_to_a,
+            min_clique_size=3,
+            max_cliques_per_network=5000,
+            max_pairs_to_find=50
+        )
+        
+        if not overlap_data or not overlap_data['clique_pairs_by_absolute']:
+            print("  No overlapping cliques found between networks")
+            # Create empty figure with message
+            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+            ax.text(0.5, 0.5, 'No overlapping cliques found between networks', 
+                   ha='center', va='center', fontsize=16)
+            ax.set_title('Shared Cliques Analysis (Separate Networks)')
+            ax.axis('off')
+            return fig
+        
+        # Create figure with 4x2 subplots (4 rows, 2 columns)
+        fig, axes = plt.subplots(4, 2, figsize=(16, 24))
+        
+        # Get top cliques by absolute and percentage
+        top_absolute = overlap_data['clique_pairs_by_absolute'][:2]
+        top_percentage = overlap_data['clique_pairs_by_percentage'][:2]
+        
+        # Combine cliques to plot
+        cliques_to_plot = []
+        main_titles = []
+        
+        # Add top absolute overlap cliques
+        for i, clique_pair in enumerate(top_absolute):
+            cliques_to_plot.append(clique_pair)
+            n_edges = clique_pair['n_edges_overlap']
+            n_edges_a = len(clique_pair['edges_a'])
+            n_edges_b = len(clique_pair['edges_b'])
+            main_titles.append(f"Top {i+1} by Absolute Overlap: {n_edges} common edges")
+        
+        # Fill if needed
+        while len(cliques_to_plot) < 2:
+            cliques_to_plot.append(None)
+            main_titles.append("No clique pair available")
+        
+        # Add top percentage overlap cliques
+        for i, clique_pair in enumerate(top_percentage):
+            cliques_to_plot.append(clique_pair)
+            percentage = clique_pair['percentage_overlap'] * 100
+            n_edges = clique_pair['n_edges_overlap']
+            main_titles.append(f"Top {i+1} by Percentage: {percentage:.1f}% overlap ({n_edges} edges)")
+        
+        # Fill if needed
+        while len(cliques_to_plot) < 4:
+            cliques_to_plot.append(None)
+            main_titles.append("No clique pair available")
+        
+        # Plot each clique pair (left column for A→B, right column for B→A)
+        for row_idx, (clique_pair, main_title) in enumerate(zip(cliques_to_plot, main_titles)):
+            
+            if clique_pair is None:
+                # Empty plots for both columns
+                for col in range(2):
+                    ax = axes[row_idx, col]
+                    ax.text(0.5, 0.5, 'No clique pair available', ha='center', va='center')
+                    ax.set_title(main_title if col == 0 else "")
+                    ax.axis('off')
+                continue
+            
+            # Create subgraphs for each direction
+            # Left column: A→B network
+            ax_left = axes[row_idx, 0]
+            graph_a = nx.Graph()
+            graph_a.add_nodes_from(clique_pair['nodes_a'])
+            for edge in clique_pair['edges_a']:
+                graph_a.add_edge(edge[0], edge[1])
+            
+            # Use circular layout for clique visualization
+            if len(clique_pair['nodes_a']) > 2:
+                pos_a = nx.circular_layout(graph_a)
+            else:
+                pos_a = nx.spring_layout(graph_a, k=2, iterations=50, seed=42)
+            
+            # Determine node colors for A→B
+            node_colors_a = []
+            node_sizes_a = []
+            for node in graph_a.nodes():
+                if node in clique_pair['node_overlap']:
+                    # Common nodes - use primary color and larger size
+                    node_colors_a.append(COLORS['primary'])
+                    node_sizes_a.append(1200)
+                else:
+                    # Only in A - use secondary color
+                    node_colors_a.append(COLORS['secondary'])
+                    node_sizes_a.append(800)
+            
+            # Draw nodes for A→B
+            nx.draw_networkx_nodes(graph_a, pos_a, node_color=node_colors_a,
+                                 node_size=node_sizes_a, alpha=0.8, ax=ax_left)
+            
+            # Draw edges for A→B
+            common_edges_in_a = []
+            unique_edges_in_a = []
+            for edge in clique_pair['edges_a']:
+                if edge in clique_pair['edge_overlap']:
+                    common_edges_in_a.append(edge)
+                else:
+                    unique_edges_in_a.append(edge)
+            
+            # Draw unique edges in gray
+            if unique_edges_in_a:
+                nx.draw_networkx_edges(graph_a, pos_a, edgelist=unique_edges_in_a,
+                                     edge_color='lightgray', width=1.5, alpha=0.5, ax=ax_left)
+            
+            # Draw common edges in bold
+            if common_edges_in_a:
+                nx.draw_networkx_edges(graph_a, pos_a, edgelist=common_edges_in_a,
+                                     edge_color=COLORS['info'], width=3, alpha=0.9, ax=ax_left)
+            
+            # Draw labels
+            nx.draw_networkx_labels(graph_a, pos_a, font_size=10, font_weight='bold', ax=ax_left)
+            
+            # Set title for A→B
+            subplot_title = f"{platform_a_name}→{platform_b_name}\n"
+            subplot_title += f"Size: {clique_pair['size_a']}, Common nodes: {clique_pair['n_nodes_overlap']}"
+            ax_left.set_title(subplot_title, fontsize=11)
+            ax_left.axis('off')
+            
+            # Add main title above the left plot
+            if row_idx == 0:
+                ax_left.text(0.5, 1.15, main_title, transform=ax_left.transAxes,
+                           ha='center', va='bottom', fontsize=13, weight='bold')
+            else:
+                ax_left.text(0.5, 1.08, main_title, transform=ax_left.transAxes,
+                           ha='center', va='bottom', fontsize=13, weight='bold')
+            
+            # Right column: B→A network
+            ax_right = axes[row_idx, 1]
+            graph_b = nx.Graph()
+            graph_b.add_nodes_from(clique_pair['nodes_b'])
+            for edge in clique_pair['edges_b']:
+                graph_b.add_edge(edge[0], edge[1])
+            
+            # Use circular layout for clique visualization
+            if len(clique_pair['nodes_b']) > 2:
+                pos_b = nx.circular_layout(graph_b)
+            else:
+                pos_b = nx.spring_layout(graph_b, k=2, iterations=50, seed=42)
+            
+            # Determine node colors for B→A
+            node_colors_b = []
+            node_sizes_b = []
+            for node in graph_b.nodes():
+                if node in clique_pair['node_overlap']:
+                    # Common nodes - use primary color and larger size
+                    node_colors_b.append(COLORS['primary'])
+                    node_sizes_b.append(1200)
+                else:
+                    # Only in B - use accent color
+                    node_colors_b.append(COLORS['accent'])
+                    node_sizes_b.append(800)
+            
+            # Draw nodes for B→A
+            nx.draw_networkx_nodes(graph_b, pos_b, node_color=node_colors_b,
+                                 node_size=node_sizes_b, alpha=0.8, ax=ax_right)
+            
+            # Draw edges for B→A
+            common_edges_in_b = []
+            unique_edges_in_b = []
+            for edge in clique_pair['edges_b']:
+                if edge in clique_pair['edge_overlap']:
+                    common_edges_in_b.append(edge)
+                else:
+                    unique_edges_in_b.append(edge)
+            
+            # Draw unique edges in gray
+            if unique_edges_in_b:
+                nx.draw_networkx_edges(graph_b, pos_b, edgelist=unique_edges_in_b,
+                                     edge_color='lightgray', width=1.5, alpha=0.5, ax=ax_right)
+            
+            # Draw common edges in bold
+            if common_edges_in_b:
+                nx.draw_networkx_edges(graph_b, pos_b, edgelist=common_edges_in_b,
+                                     edge_color=COLORS['info'], width=3, alpha=0.9, ax=ax_right)
+            
+            # Draw labels
+            nx.draw_networkx_labels(graph_b, pos_b, font_size=10, font_weight='bold', ax=ax_right)
+            
+            # Set title for B→A
+            subplot_title = f"{platform_b_name}→{platform_a_name}\n"
+            subplot_title += f"Size: {clique_pair['size_b']}, Common nodes: {clique_pair['n_nodes_overlap']}"
+            ax_right.set_title(subplot_title, fontsize=11)
+            ax_right.axis('off')
+        
+        # Add legend on the first row
+        if cliques_to_plot[0] is not None:
+            from matplotlib.patches import Patch
+            from matplotlib.lines import Line2D
+            legend_elements = [
+                Patch(facecolor=COLORS['primary'], label='Common nodes'),
+                Patch(facecolor=COLORS['secondary'], label=f'{platform_a_name}→{platform_b_name} only'),
+                Patch(facecolor=COLORS['accent'], label=f'{platform_b_name}→{platform_a_name} only'),
+                Line2D([0], [0], color=COLORS['info'], linewidth=3, label='Common edges'),
+                Line2D([0], [0], color='lightgray', linewidth=1, label='Unique edges')
+            ]
+            axes[0, 1].legend(handles=legend_elements, loc='upper right', fontsize=10)
+        
+        # Add overall title
+        plt.suptitle(f'Shared Cliques: {platform_a_name}↔{platform_b_name} (Separate Network Views)',
+                    fontsize=16, y=0.995)
+        plt.tight_layout(rect=[0, 0, 1, 0.99])
+        
+        return self.save_figure(fig, "shared_cliques_separate_networks")
+    
     def plot_network_cliques_with_ppi(self, network: 'nx.Graph', ppi_network: 'nx.Graph', 
                                      title_prefix: str, max_nodes: int = 100) -> plt.Figure:
         """
@@ -4983,15 +5217,21 @@ class CorrelationNetworkAnalyzer:
                     except Exception as e:
                         print(f"Error generating B→A clique analysis: {e}")
                     
-                    # Add shared cliques visualization
+                    # Add shared cliques visualizations
                     try:
                         if data.network_a_to_b is not None and data.network_b_to_a is not None:
+                            # Combined view
                             figures['shared_cliques'] = self.plot_shared_cliques_between_directions(
                                 data.network_a_to_b, data.network_b_to_a,
                                 data.platform_a_name, data.platform_b_name
                             )
+                            # Separate networks view
+                            figures['shared_cliques_separate'] = self.plot_shared_cliques_separate_networks(
+                                data.network_a_to_b, data.network_b_to_a,
+                                data.platform_a_name, data.platform_b_name
+                            )
                     except Exception as e:
-                        print(f"Error generating shared cliques visualization: {e}")
+                        print(f"Error generating shared cliques visualizations: {e}")
                 else:
                     print("  Skipping clique analysis as requested (--skip_cliques flag)")
             

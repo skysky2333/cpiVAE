@@ -2986,9 +2986,6 @@ class ComparativeAnalyzer:
         original_phenotype_data = data.phenotype_data
         data.phenotype_data = full_phenotype_data
         
-        # Show how many phenotypes are available
-        print(f"  Total columns in phenotype data: {full_phenotype_data.shape[1]}")
-        
         # Calculate associations for ALL phenotypes
         all_binary_results = self.calculate_all_binary_associations(data)
         all_continuous_results = self.calculate_all_continuous_associations(data)
@@ -3134,6 +3131,8 @@ class ComparativeAnalyzer:
         ax1.set_title('Binary Phenotypes: Retention of Associations', fontweight='bold', fontsize=14)
         ax1.set_xlabel('Number of Significant Associations in Truth Data', fontsize=12)
         ax1.set_ylabel('Number Retained in Imputed Data', fontsize=12)
+        ax1.set_xscale('log')
+        ax1.set_yscale('log')
         
         # Define colors for methods
         method_colors = {
@@ -3147,7 +3146,14 @@ class ComparativeAnalyzer:
         
         # Plot binary phenotype scatter (ax1)
         if not binary_df.empty:
-            for method in binary_df['method'].unique():
+            # Get unique methods and sort to ensure Method1 is plotted last
+            methods = list(binary_df['method'].unique())
+            # Move Method1 to the end if it exists
+            if data.method1_name in methods:
+                methods.remove(data.method1_name)
+                methods.append(data.method1_name)
+            
+            for method in methods:
                 method_data = binary_df[binary_df['method'] == method]
                 ax1.scatter(method_data['n_truth_sig'], 
                            method_data['n_retained'],
@@ -3158,16 +3164,22 @@ class ComparativeAnalyzer:
                            edgecolor='black',
                            linewidth=0.5)
             
-            # Add diagonal reference line (perfect retention)
+            # Add diagonal reference line (perfect retention) - use more points for log scale
             max_val_binary = binary_df['n_truth_sig'].max() if not binary_df.empty else 100
-            ax1.plot([0, max_val_binary], [0, max_val_binary], 'k--', alpha=0.3, label='Perfect Retention')
-            ax1.plot([0, max_val_binary], [0, max_val_binary*0.5], 'k:', alpha=0.3, label='50% Retention')
+            min_val_binary = max(1, binary_df['n_truth_sig'].min()) if not binary_df.empty else 1
+            # Create log-spaced points for smoother lines on log scale
+            x_vals = np.logspace(np.log10(min_val_binary), np.log10(max_val_binary), 100)
+            ax1.plot(x_vals, x_vals, 'k--', alpha=0.3, label='Perfect Retention')
+            ax1.plot(x_vals, x_vals * 0.5, 'k:', alpha=0.3, label='50% Retention')
             
             ax1.legend(loc='upper left', fontsize=10)
-            ax1.grid(True, alpha=0.3)
-            ax1.set_xlim(left=-1)
-            ax1.set_ylim(bottom=-1)
-            ax1.set_aspect('equal', 'box')
+            ax1.grid(True, alpha=0.3, which='both')
+            # Set sensible axis limits for log scale
+            ax1.set_xlim(left=max(0.9, min_val_binary * 0.9), right=max_val_binary * 1.5)
+            # For log scale y-axis, avoid 0 by setting minimum to 0.9
+            min_y_binary = max(0.9, binary_df['n_retained'][binary_df['n_retained'] > 0].min() * 0.9) if not binary_df[binary_df['n_retained'] > 0].empty else 0.9
+            ax1.set_ylim(bottom=min_y_binary, top=max(binary_df['n_retained'].max(), max_val_binary) * 1.5)
+            # ax1.set_aspect('equal', 'box')  # Commented out for log scale compatibility
         else:
             ax1.text(0.5, 0.5, 'No binary phenotype data', ha='center', va='center', transform=ax1.transAxes)
         
@@ -3175,9 +3187,18 @@ class ComparativeAnalyzer:
         ax2.set_title('Continuous Phenotypes: Retention of Associations', fontweight='bold', fontsize=14)
         ax2.set_xlabel('Number of Significant Associations in Truth Data', fontsize=12)
         ax2.set_ylabel('Number Retained in Imputed Data', fontsize=12)
+        ax2.set_xscale('log')
+        ax2.set_yscale('log')
         
         if not continuous_df.empty:
-            for method in continuous_df['method'].unique():
+            # Get unique methods and sort to ensure Method1 is plotted last
+            methods = list(continuous_df['method'].unique())
+            # Move Method1 to the end if it exists
+            if data.method1_name in methods:
+                methods.remove(data.method1_name)
+                methods.append(data.method1_name)
+            
+            for method in methods:
                 method_data = continuous_df[continuous_df['method'] == method]
                 ax2.scatter(method_data['n_truth_sig'], 
                            method_data['n_retained'],
@@ -3188,16 +3209,22 @@ class ComparativeAnalyzer:
                            edgecolor='black',
                            linewidth=0.5)
             
-            # Add diagonal reference line (perfect retention)
+            # Add diagonal reference line (perfect retention) - use more points for log scale
             max_val_cont = continuous_df['n_truth_sig'].max() if not continuous_df.empty else 100
-            ax2.plot([0, max_val_cont], [0, max_val_cont], 'k--', alpha=0.3, label='Perfect Retention')
-            ax2.plot([0, max_val_cont], [0, max_val_cont*0.5], 'k:', alpha=0.3, label='50% Retention')
+            min_val_cont = max(1, continuous_df['n_truth_sig'].min()) if not continuous_df.empty else 1
+            # Create log-spaced points for smoother lines on log scale
+            x_vals = np.logspace(np.log10(min_val_cont), np.log10(max_val_cont), 100)
+            ax2.plot(x_vals, x_vals, 'k--', alpha=0.3, label='Perfect Retention')
+            ax2.plot(x_vals, x_vals * 0.5, 'k:', alpha=0.3, label='50% Retention')
             
             ax2.legend(loc='upper left', fontsize=10)
-            ax2.grid(True, alpha=0.3)
-            ax2.set_xlim(left=-1)
-            ax2.set_ylim(bottom=-1)
-            ax2.set_aspect('equal', 'box')
+            ax2.grid(True, alpha=0.3, which='both')
+            # Set sensible axis limits for log scale
+            ax2.set_xlim(left=max(0.9, min_val_cont * 0.9), right=max_val_cont * 1.5)
+            # For log scale y-axis, avoid 0 by setting minimum to 0.9
+            min_y_cont = max(0.9, continuous_df['n_retained'][continuous_df['n_retained'] > 0].min() * 0.9) if not continuous_df[continuous_df['n_retained'] > 0].empty else 0.9
+            ax2.set_ylim(bottom=min_y_cont, top=max(continuous_df['n_retained'].max(), max_val_cont) * 1.5)
+            # ax2.set_aspect('equal', 'box')  # Commented out for log scale compatibility
         else:
             ax2.text(0.5, 0.5, 'No continuous phenotype data', ha='center', va='center', transform=ax2.transAxes)
         
@@ -3638,6 +3665,539 @@ class ComparativeAnalyzer:
                 label.set_horizontalalignment('right')
         
         plt.tight_layout()
+        return fig
+    
+    def generate_figure_28a_phenotype_forest_plots_binary_limited(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 28a: Forest plots for binary phenotype associations (Truth, Method1, Method2 only)"""
+        if not association_results:
+            print("  No binary phenotype associations to plot")
+            return None
+        
+        print("Generating Figure 28a: Binary phenotype forest plots (limited methods)...")
+        
+        # Determine subplot layout - forest plots only
+        n_phenotypes = len(association_results)
+        total_subplots = n_phenotypes
+        n_cols = min(3, total_subplots)  # Max 3 columns for better readability
+        n_rows = (total_subplots + n_cols - 1) // n_cols
+        
+        # Double the height per row to accommodate top 20 features
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 15*n_rows))
+        # Ensure axes is always a list
+        if total_subplots == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+        else:
+            axes = axes.flatten()
+        
+        fig.suptitle('Binary Phenotype Associations: Forest Plots (Truth, Method1, Method2)', fontsize=16, fontweight='bold')
+        
+        # Method colors: Only Truth, Method1, Method2
+        method_colors = {
+            'Truth': 'black',
+            data.method1_name: NATURE_COLORS['primary'],
+            data.method2_name: NATURE_COLORS['secondary']
+        }
+        
+        # Generate forest plots for each phenotype
+        for idx, (phenotype, results_df) in enumerate(association_results.items()):
+            ax = axes[idx]
+            
+            # Filter results to only include Truth, Method1, Method2
+            results_df_filtered = results_df[results_df['method'].isin(['Truth', data.method1_name, data.method2_name])].copy()
+            
+            # Select top features by significance (lowest p-values from Truth)
+            truth_results = results_df_filtered[results_df_filtered['method'] == 'Truth'].copy()
+            if len(truth_results) > 0:
+                # Apply FDR correction
+                _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), 
+                                                        method='fdr_bh', alpha=0.05)
+                truth_results['p_adj'] = pvals_corrected
+                
+                # Select top 20 features by adjusted p-value
+                top_features = truth_results.nsmallest(20, 'p_adj')['feature'].tolist()
+            else:
+                # If no truth results, use results from first available method
+                top_features = results_df_filtered['feature'].unique()[:20]
+            
+            # Filter results to top features
+            plot_data = results_df_filtered[results_df_filtered['feature'].isin(top_features)].copy()
+            
+            if len(plot_data) == 0:
+                ax.text(0.5, 0.5, f'No significant associations for {phenotype}', 
+                       ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(phenotype)
+                continue
+            
+            # Prepare data for forest plot
+            y_positions = {}
+            # Start from high y-value and decrease, so most significant features appear at top
+            current_y = (len(top_features) - 1) * 2
+            
+            for feature in top_features:
+                feature_data = plot_data[plot_data['feature'] == feature]
+                if len(feature_data) > 0:
+                    y_positions[feature] = current_y
+                    current_y -= 2  # decrease y position for next feature
+            
+            # Plot forest plot
+            for method in ['Truth', data.method1_name, data.method2_name]:
+                if method not in plot_data['method'].values:
+                    continue
+                    
+                method_data = plot_data[plot_data['method'] == method]
+                
+                for _, row in method_data.iterrows():
+                    if row['feature'] in y_positions:
+                        y_pos = y_positions[row['feature']]
+                        
+                        # Offset for multiple methods
+                        method_offset = list(method_colors.keys()).index(method) * 0.3 - 0.3
+                        
+                        # Plot confidence interval
+                        ax.plot([row['ci_lower'], row['ci_upper']], 
+                               [y_pos + method_offset, y_pos + method_offset],
+                               color=method_colors.get(method, 'gray'), linewidth=2, alpha=0.7)
+                        
+                        # Plot point estimate as circle: solid = significant, empty = non-significant
+                        is_sig = (row['p_value'] < 0.05) if pd.notna(row['p_value']) else False
+                        if is_sig:
+                            ax.scatter(row['odds_ratio'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors=method_colors.get(method, 'gray'),
+                                       edgecolors='black', linewidth=0.5)
+                        else:
+                            ax.scatter(row['odds_ratio'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors='none',
+                                       edgecolors=method_colors.get(method, 'gray'), linewidth=1.2)
+            
+            # Add vertical line at OR=1
+            ax.axvline(x=1, color='gray', linestyle='--', alpha=0.5)
+            
+            # Labels and formatting
+            ax.set_yticks(list(y_positions.values()))
+            ax.set_yticklabels([f[:20] + '...' if len(f) > 20 else f for f in y_positions.keys()], 
+                              fontsize=10)
+            ax.set_xlabel('Odds Ratio (95% CI)')
+            ax.set_ylabel('Feature')
+            ax.set_title(phenotype, fontweight='bold')
+            # Linear scale for odds ratios
+            ax.grid(True, alpha=0.3, axis='x')
+            # Use ScalarFormatter with plain style for tick labels
+            from matplotlib.ticker import ScalarFormatter
+            sfmt = ScalarFormatter(useMathText=False)
+            sfmt.set_scientific(False)
+            ax.xaxis.set_major_formatter(sfmt)
+            
+            # Set y-axis limits to accommodate the increased spacing
+            if y_positions:
+                ax.set_ylim(-1, max(y_positions.values()) + 1)
+            
+            # Add legend
+            legend_elements = []
+            for method, color in method_colors.items():
+                if method in plot_data['method'].values:
+                    legend_elements.append(plt.Line2D([0], [0], color=color, lw=2, label=method))
+            ax.legend(handles=legend_elements, loc='best', fontsize=10)
+        
+        # Hide unused subplots and ensure labels are not clipped
+        for idx in range(total_subplots, len(axes)):
+            axes[idx].axis('off')
+        for ax in axes[:total_subplots]:
+            for label in ax.get_xticklabels():
+                label.set_horizontalalignment('right')
+        
+        plt.tight_layout()
+        return fig
+    
+    def generate_figure_29a_phenotype_forest_plots_continuous_limited(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 29a: Forest plots for continuous phenotype associations (Truth, Method1, Method2 only)"""
+        if not association_results:
+            print("  No continuous phenotype associations to plot")
+            return None
+        
+        print("Generating Figure 29a: Continuous phenotype forest plots (limited methods)...")
+        
+        # Determine subplot layout - add one more subplot for MAE
+        n_phenotypes = len(association_results)
+        total_subplots = n_phenotypes
+        n_cols = min(3, total_subplots)  # Max 3 columns for better readability
+        n_rows = (total_subplots + n_cols - 1) // n_cols
+        
+        # Double the height per row to accommodate top 20 features
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 15*n_rows))
+        # Ensure axes is always a list
+        if total_subplots == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+        else:
+            axes = axes.flatten()
+        
+        fig.suptitle('Continuous Phenotype Associations: Forest Plots (Truth, Method1, Method2)', fontsize=16, fontweight='bold')
+        
+        # Method colors: Only Truth, Method1, Method2
+        method_colors = {
+            'Truth': 'black',
+            data.method1_name: NATURE_COLORS['primary'],
+            data.method2_name: NATURE_COLORS['secondary']
+        }
+        
+        # Generate forest plots for each phenotype
+        for idx, (phenotype, results_df) in enumerate(association_results.items()):
+            ax = axes[idx]
+            
+            # Filter results to only include Truth, Method1, Method2
+            results_df_filtered = results_df[results_df['method'].isin(['Truth', data.method1_name, data.method2_name])].copy()
+            
+            # Select top features by significance (lowest p-values from Truth)
+            truth_results = results_df_filtered[results_df_filtered['method'] == 'Truth'].copy()
+            if len(truth_results) > 0:
+                # Apply FDR correction
+                _, pvals_corrected, _, _ = multipletests(truth_results['p_value'].fillna(1), 
+                                                        method='fdr_bh', alpha=0.05)
+                truth_results['p_adj'] = pvals_corrected
+                
+                # Select top 20 features by adjusted p-value
+                top_features = truth_results.nsmallest(20, 'p_adj')['feature'].tolist()
+            else:
+                # If no truth results, use results from first available method
+                top_features = results_df_filtered['feature'].unique()[:20]
+            
+            # Filter results to top features
+            plot_data = results_df_filtered[results_df_filtered['feature'].isin(top_features)].copy()
+            
+            if len(plot_data) == 0:
+                ax.text(0.5, 0.5, f'No significant associations for {phenotype}', 
+                       ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(phenotype)
+                continue
+            
+            # Prepare data for forest plot
+            y_positions = {}
+            # Start from high y-value and decrease, so most significant features appear at top
+            current_y = (len(top_features) - 1) * 2
+            
+            for feature in top_features:
+                feature_data = plot_data[plot_data['feature'] == feature]
+                if len(feature_data) > 0:
+                    y_positions[feature] = current_y
+                    current_y -= 2  # decrease y position for next feature
+            
+            # Plot forest plot
+            for method in ['Truth', data.method1_name, data.method2_name]:
+                if method not in plot_data['method'].values:
+                    continue
+                    
+                method_data = plot_data[plot_data['method'] == method]
+                
+                for _, row in method_data.iterrows():
+                    if row['feature'] in y_positions:
+                        y_pos = y_positions[row['feature']]
+                        
+                        # Offset for multiple methods
+                        method_offset = list(method_colors.keys()).index(method) * 0.3 - 0.3
+                        
+                        # Plot confidence interval
+                        ax.plot([row['ci_lower'], row['ci_upper']], 
+                               [y_pos + method_offset, y_pos + method_offset],
+                               color=method_colors.get(method, 'gray'), linewidth=2, alpha=0.7)
+                        
+                        # Plot point estimate as circle: solid = significant, empty = non-significant
+                        is_sig = (row['p_value'] < 0.05) if pd.notna(row['p_value']) else False
+                        if is_sig:
+                            ax.scatter(row['beta'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors=method_colors.get(method, 'gray'),
+                                       edgecolors='black', linewidth=0.5)
+                        else:
+                            ax.scatter(row['beta'], y_pos + method_offset,
+                                       s=60, marker='o', facecolors='none',
+                                       edgecolors=method_colors.get(method, 'gray'), linewidth=1.2)
+            
+            # Add vertical line at beta=0
+            ax.axvline(x=0, color='gray', linestyle='--', alpha=0.5)
+            
+            # Labels and formatting
+            ax.set_yticks(list(y_positions.values()))
+            ax.set_yticklabels([f[:20] + '...' if len(f) > 20 else f for f in y_positions.keys()], 
+                              fontsize=10)
+            ax.set_xlabel('Beta Coefficient (95% CI)')
+            ax.set_ylabel('Feature')
+            ax.set_title(phenotype, fontweight='bold')
+            ax.grid(True, alpha=0.3, axis='x')
+            
+            # Set y-axis limits to accommodate the increased spacing
+            if y_positions:
+                ax.set_ylim(-1, max(y_positions.values()) + 1)
+            
+            # Add legend
+            legend_elements = []
+            for method, color in method_colors.items():
+                if method in plot_data['method'].values:
+                    legend_elements.append(plt.Line2D([0], [0], color=color, lw=2, label=method))
+            ax.legend(handles=legend_elements, loc='best', fontsize=10)
+            
+            # Add R² annotation for each method
+            r2_text = []
+            for method in ['Truth', data.method1_name, data.method2_name]:
+                if method in plot_data['method'].values:
+                    method_data = plot_data[plot_data['method'] == method]
+                    if len(method_data) > 0:
+                        mean_r2 = method_data['r_squared'].mean()
+                        r2_text.append(f"{method}: R²={mean_r2:.3f}")
+            
+            ax.text(0.02, 0.98, '\n'.join(r2_text), transform=ax.transAxes, 
+                   fontsize=8, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        # Hide unused subplots
+        for idx in range(total_subplots, len(axes)):
+            axes[idx].axis('off')
+        for ax in axes[:total_subplots]:
+            for label in ax.get_xticklabels():
+                label.set_horizontalalignment('right')
+        
+        plt.tight_layout()
+        return fig
+    
+    def generate_figure_28d_significance_contingency_binary_bonferroni(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 28d: Contingency matrix of significant hits using Bonferroni correction for binary phenotypes"""
+        if not association_results:
+            print("  No binary phenotype associations for contingency matrix")
+            return None
+        
+        print("Generating Figure 28d: Binary phenotype significance contingency matrix (Bonferroni correction)...")
+        
+        # Get all available methods (excluding Method4/permuted)
+        all_methods = ['Truth']
+        if data.method1_name:
+            all_methods.append(data.method1_name)
+        if data.method2_name:
+            all_methods.append(data.method2_name)
+        if data.method3_name:
+            all_methods.append(data.method3_name)
+        # Exclude Method4 (permuted data) from contingency analysis
+        
+        # Initialize contingency matrix for each phenotype
+        contingency_matrices = {}
+        
+        for phenotype, results_df in association_results.items():
+            # Create a matrix to store counts of overlapping significant hits
+            n_methods = len(all_methods)
+            contingency = np.zeros((n_methods, n_methods))
+            
+            # Get the total number of tests (features) for Bonferroni correction
+            n_tests = results_df['feature'].nunique()
+            bonferroni_threshold = 0.05 / n_tests if n_tests > 0 else 0.05
+            
+            print(f"    {phenotype}: Using Bonferroni threshold = {bonferroni_threshold:.2e} (0.05/{n_tests} tests)")
+            
+            # Get significant features for each method using Bonferroni correction
+            sig_features_by_method = {}
+            
+            for method in all_methods:
+                method_results = results_df[results_df['method'] == method].copy()
+                if len(method_results) > 0:
+                    # Apply Bonferroni correction (simple threshold)
+                    sig_features = set(method_results[method_results['p_value'] < bonferroni_threshold]['feature'].tolist())
+                    sig_features_by_method[method] = sig_features
+                else:
+                    sig_features_by_method[method] = set()
+            
+            # Fill contingency matrix with overlap counts
+            for i, method1 in enumerate(all_methods):
+                for j, method2 in enumerate(all_methods):
+                    if method1 in sig_features_by_method and method2 in sig_features_by_method:
+                        if i == j:
+                            # Diagonal: total significant hits for this method
+                            contingency[i, j] = len(sig_features_by_method[method1])
+                        else:
+                            # Off-diagonal: intersection of significant hits
+                            contingency[i, j] = len(
+                                sig_features_by_method[method1] & sig_features_by_method[method2]
+                            )
+            
+            contingency_matrices[phenotype] = contingency
+        
+        # Create figure with subplots for each phenotype
+        n_phenotypes = len(contingency_matrices)
+        n_cols = min(3, n_phenotypes)
+        n_rows = (n_phenotypes + n_cols - 1) // n_cols
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+        if n_phenotypes == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+        else:
+            axes = axes.flatten()
+        
+        fig.suptitle('Binary Phenotype: Significant Hits Contingency (Bonferroni Correction)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Plot each contingency matrix
+        for idx, (phenotype, contingency) in enumerate(contingency_matrices.items()):
+            ax = axes[idx]
+            
+            # Create heatmap with equal aspect ratio for square plot
+            im = ax.imshow(contingency, cmap='YlGnBu', aspect='equal', vmin=0)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label('Number of Hits', rotation=270, labelpad=15)
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(len(all_methods)))
+            ax.set_yticks(np.arange(len(all_methods)))
+            ax.set_xticklabels(all_methods, rotation=45, ha='right')
+            ax.set_yticklabels(all_methods)
+            
+            # Add text annotations
+            for i in range(len(all_methods)):
+                for j in range(len(all_methods)):
+                    value = int(contingency[i, j])
+                    text_color = 'white' if contingency[i, j] > contingency.max() * 0.5 else 'black'
+                    ax.text(j, i, str(value), ha='center', va='center', 
+                           color=text_color, fontsize=10, fontweight='bold')
+            
+            ax.set_title(phenotype, fontweight='bold')
+            ax.set_xlabel('Method')
+            ax.set_ylabel('Method')
+            
+            # Add grid for clarity
+            ax.set_xticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.set_yticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.grid(which='minor', color='gray', linestyle='-', linewidth=0.5)
+            ax.tick_params(which='minor', size=0)
+            
+            # Make the plot square
+            ax.set_aspect('equal', adjustable='box')
+        
+        # Hide unused subplots
+        for idx in range(len(contingency_matrices), len(axes)):
+            axes[idx].axis('off')
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        return fig
+    
+    def generate_figure_29d_significance_contingency_continuous_bonferroni(self, data: AnalysisData, association_results: Dict[str, pd.DataFrame]):
+        """Figure 29d: Contingency matrix of significant hits using Bonferroni correction for continuous phenotypes"""
+        if not association_results:
+            print("  No continuous phenotype associations for contingency matrix")
+            return None
+        
+        print("Generating Figure 29d: Continuous phenotype significance contingency matrix (Bonferroni correction)...")
+        
+        # Get all available methods (excluding Method4/permuted)
+        all_methods = ['Truth']
+        if data.method1_name:
+            all_methods.append(data.method1_name)
+        if data.method2_name:
+            all_methods.append(data.method2_name)
+        if data.method3_name:
+            all_methods.append(data.method3_name)
+        # Exclude Method4 (permuted data) from contingency analysis
+        
+        # Initialize contingency matrix for each phenotype
+        contingency_matrices = {}
+        
+        for phenotype, results_df in association_results.items():
+            # Create a matrix to store counts of overlapping significant hits
+            n_methods = len(all_methods)
+            contingency = np.zeros((n_methods, n_methods))
+            
+            # Get the total number of tests (features) for Bonferroni correction
+            n_tests = results_df['feature'].nunique()
+            bonferroni_threshold = 0.05 / n_tests if n_tests > 0 else 0.05
+            
+            print(f"    {phenotype}: Using Bonferroni threshold = {bonferroni_threshold:.2e} (0.05/{n_tests} tests)")
+            
+            # Get significant features for each method using Bonferroni correction
+            sig_features_by_method = {}
+            
+            for method in all_methods:
+                method_results = results_df[results_df['method'] == method].copy()
+                if len(method_results) > 0:
+                    # Apply Bonferroni correction (simple threshold)
+                    sig_features = set(method_results[method_results['p_value'] < bonferroni_threshold]['feature'].tolist())
+                    sig_features_by_method[method] = sig_features
+                else:
+                    sig_features_by_method[method] = set()
+            
+            # Fill contingency matrix with overlap counts
+            for i, method1 in enumerate(all_methods):
+                for j, method2 in enumerate(all_methods):
+                    if method1 in sig_features_by_method and method2 in sig_features_by_method:
+                        if i == j:
+                            # Diagonal: total significant hits for this method
+                            contingency[i, j] = len(sig_features_by_method[method1])
+                        else:
+                            # Off-diagonal: intersection of significant hits
+                            contingency[i, j] = len(
+                                sig_features_by_method[method1] & sig_features_by_method[method2]
+                            )
+            
+            contingency_matrices[phenotype] = contingency
+        
+        # Create figure with subplots for each phenotype
+        n_phenotypes = len(contingency_matrices)
+        n_cols = min(3, n_phenotypes)
+        n_rows = (n_phenotypes + n_cols - 1) // n_cols
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+        if n_phenotypes == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+        else:
+            axes = axes.flatten()
+        
+        fig.suptitle('Continuous Phenotype: Significant Hits Contingency (Bonferroni Correction)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Plot each contingency matrix
+        for idx, (phenotype, contingency) in enumerate(contingency_matrices.items()):
+            ax = axes[idx]
+            
+            # Create heatmap with equal aspect ratio for square plot
+            im = ax.imshow(contingency, cmap='YlGnBu', aspect='equal', vmin=0)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label('Number of Hits', rotation=270, labelpad=15)
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(len(all_methods)))
+            ax.set_yticks(np.arange(len(all_methods)))
+            ax.set_xticklabels(all_methods, rotation=45, ha='right')
+            ax.set_yticklabels(all_methods)
+            
+            # Add text annotations
+            for i in range(len(all_methods)):
+                for j in range(len(all_methods)):
+                    value = int(contingency[i, j])
+                    text_color = 'white' if contingency[i, j] > contingency.max() * 0.5 else 'black'
+                    ax.text(j, i, str(value), ha='center', va='center', 
+                           color=text_color, fontsize=10, fontweight='bold')
+            
+            ax.set_title(phenotype, fontweight='bold')
+            ax.set_xlabel('Method')
+            ax.set_ylabel('Method')
+            
+            # Add grid for clarity
+            ax.set_xticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.set_yticks(np.arange(len(all_methods) + 1) - 0.5, minor=True)
+            ax.grid(which='minor', color='gray', linestyle='-', linewidth=0.5)
+            ax.tick_params(which='minor', size=0)
+            
+            # Make the plot square
+            ax.set_aspect('equal', adjustable='box')
+        
+        # Hide unused subplots
+        for idx in range(len(contingency_matrices), len(axes)):
+            axes[idx].axis('off')
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
         return fig
     
     def save_figure(self, fig: plt.Figure, name: str, **kwargs):
@@ -5268,9 +5828,9 @@ class ComparativeAnalyzer:
                 ax.set_title('Dimensionality Reduction Concordance')
                 return fig
             
-            # Create plots for Platform A with both PCA and UMAP
-            fig, (ax_pca, ax_umap) = plt.subplots(1, 2, figsize=(12, 6))
-            fig.suptitle(f'Structure Preservation Assessment: PCA and UMAP - {data.platform_a_name}\n(Models fitted on combined data)', 
+            # Create plots for Platform A with both PCA and UMAP, plus variance analysis
+            fig, ((ax_pca, ax_umap), (ax_var_feat, ax_var_samp)) = plt.subplots(2, 2, figsize=(12, 12))
+            fig.suptitle(f'Structure Preservation Assessment: PCA/UMAP and Variance Analysis - {data.platform_a_name}\n(Models fitted on combined data)', 
                         fontsize=14, fontweight='bold')
             
             type_markers = {'Truth': 'o', 'Imputed': '^'}
@@ -5374,6 +5934,131 @@ class ComparativeAnalyzer:
                 ax_umap.set_title(f'UMAP - {data.platform_a_name}')
                 ax_umap.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
                 ax_umap.grid(True, alpha=0.3)
+                
+                # Calculate variance in PC coordinates for bottom panels
+                # We'll compare the variance captured by each method vs truth
+                
+                # Get the truth PCA coordinates
+                truth_idx_start = 0
+                truth_idx_end = platform_sample_data[0].shape[0]
+                truth_pca_coords = pca_embedding[truth_idx_start:truth_idx_end, :]
+                
+                # Calculate variance in truth for PC1 and PC2
+                truth_pc1_var = np.var(truth_pca_coords[:, 0])
+                truth_pc2_var = np.var(truth_pca_coords[:, 1])
+                truth_total_var = truth_pc1_var + truth_pc2_var  # Total variance (PC1 + PC2)
+                
+                # Store method names and their variances
+                method_names = []
+                total_variances = []  # PC1 + PC2 combined
+                pc2_variances = []
+                
+                # Track the current index in the combined embedding
+                current_idx = truth_idx_end
+                
+                # Process each imputation method
+                for i, (name, dataset) in enumerate(list(datasets_dict.items())[1:]):  # Skip truth
+                    if 'Truth' not in name:
+                        method_samples = dataset.shape[1]
+                        method_pca_coords = pca_embedding[current_idx:current_idx + method_samples, :]
+                        
+                        # Calculate variance for this method
+                        method_pc1_var = np.var(method_pca_coords[:, 0])
+                        method_pc2_var = np.var(method_pca_coords[:, 1])
+                        method_total_var = method_pc1_var + method_pc2_var  # Total variance
+                        
+                        # Extract method name without platform suffix
+                        clean_name = name.replace('_A', '')
+                        method_names.append(clean_name)
+                        total_variances.append(method_total_var)
+                        pc2_variances.append(method_pc2_var)
+                        
+                        current_idx += method_samples
+                
+                # Plot total variance comparison (PC1 + PC2) (bottom left)
+                if total_variances:
+                    # Prepare data for bar plot
+                    x_pos = np.arange(len(method_names) + 1)
+                    all_names = ['Truth'] + method_names
+                    all_total_vars = [truth_total_var] + total_variances
+                    
+                    # Create bar plot
+                    colors_list = ['gray'] + [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], NATURE_COLORS['accent']]
+                    bars = ax_var_feat.bar(x_pos, all_total_vars, color=colors_list[:len(all_names)], alpha=0.7, edgecolor='black')
+                    
+                    # Add value labels on bars
+                    for bar, var in zip(bars, all_total_vars):
+                        height = bar.get_height()
+                        ax_var_feat.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{var:.3f}', ha='center', va='bottom', fontsize=9)
+                    
+                    # Add horizontal line at truth variance
+                    ax_var_feat.axhline(y=truth_total_var, color='red', linestyle='--', alpha=0.5, label='Truth total variance')
+                    
+                    ax_var_feat.set_xticks(x_pos)
+                    ax_var_feat.set_xticklabels(all_names, rotation=45, ha='right')
+                    ax_var_feat.set_ylabel('Total Variance (PC1 + PC2)')
+                    ax_var_feat.set_title('Total Variance Comparison (PC1 + PC2)')
+                    ax_var_feat.grid(True, alpha=0.3, axis='y')
+                    ax_var_feat.legend()
+                    
+                    # Calculate variance ratios
+                    ratio_text = []
+                    for name, var in zip(method_names, total_variances):
+                        ratio = var / truth_total_var
+                        ratio_text.append(f"{name}: {ratio:.2%} of Truth")
+                    
+                    ax_var_feat.text(0.02, 0.98, 'Variance Ratio:\n' + '\n'.join(ratio_text), 
+                                    transform=ax_var_feat.transAxes,
+                                    fontsize=8, verticalalignment='top',
+                                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                else:
+                    ax_var_feat.text(0.5, 0.5, 'No total variance data available', 
+                                    ha='center', va='center', transform=ax_var_feat.transAxes)
+                    ax_var_feat.set_title('Total Variance Comparison (PC1 + PC2)')
+                
+                # Plot PC2 variance comparison (bottom right)
+                if pc2_variances:
+                    # Prepare data for bar plot
+                    x_pos = np.arange(len(method_names) + 1)
+                    all_names = ['Truth'] + method_names
+                    all_pc2_vars = [truth_pc2_var] + pc2_variances
+                    
+                    # Create bar plot
+                    colors_list = ['gray'] + [NATURE_COLORS['primary'], NATURE_COLORS['secondary'], NATURE_COLORS['accent']]
+                    bars = ax_var_samp.bar(x_pos, all_pc2_vars, color=colors_list[:len(all_names)], alpha=0.7, edgecolor='black')
+                    
+                    # Add value labels on bars
+                    for bar, var in zip(bars, all_pc2_vars):
+                        height = bar.get_height()
+                        ax_var_samp.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{var:.3f}', ha='center', va='bottom', fontsize=9)
+                    
+                    # Add horizontal line at truth variance
+                    ax_var_samp.axhline(y=truth_pc2_var, color='red', linestyle='--', alpha=0.5, label='Truth variance')
+                    
+                    ax_var_samp.set_xticks(x_pos)
+                    ax_var_samp.set_xticklabels(all_names, rotation=45, ha='right')
+                    ax_var_samp.set_ylabel('Variance in PC2')
+                    ax_var_samp.set_title('PC2 Variance Comparison')
+                    ax_var_samp.grid(True, alpha=0.3, axis='y')
+                    ax_var_samp.legend()
+                    
+                    # Calculate variance ratios
+                    ratio_text = []
+                    for name, var in zip(method_names, pc2_variances):
+                        ratio = var / truth_pc2_var
+                        ratio_text.append(f"{name}: {ratio:.2%} of Truth")
+                    
+                    ax_var_samp.text(0.02, 0.98, 'Variance Ratio:\n' + '\n'.join(ratio_text), 
+                                    transform=ax_var_samp.transAxes,
+                                    fontsize=8, verticalalignment='top',
+                                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                else:
+                    ax_var_samp.text(0.5, 0.5, 'No PC2 variance data available', 
+                                    ha='center', va='center', transform=ax_var_samp.transAxes)
+                    ax_var_samp.set_title('PC2 Variance Comparison')
+                    
             else:
                 # No data available
                 ax_pca.text(0.5, 0.5, f'No data for {data.platform_a_name}', 
@@ -5383,6 +6068,14 @@ class ComparativeAnalyzer:
                 ax_umap.text(0.5, 0.5, f'No data for {data.platform_a_name}', 
                            ha='center', va='center', transform=ax_umap.transAxes, fontsize=12)
                 ax_umap.set_title(f'UMAP - {data.platform_a_name}')
+                
+                ax_var_feat.text(0.5, 0.5, 'No data available', 
+                               ha='center', va='center', transform=ax_var_feat.transAxes)
+                ax_var_feat.set_title('Total Variance Comparison (PC1 + PC2)')
+                
+                ax_var_samp.text(0.5, 0.5, 'No data available', 
+                               ha='center', va='center', transform=ax_var_samp.transAxes)
+                ax_var_samp.set_title('PC2 Variance Comparison')
             
             plt.tight_layout()
             return fig
@@ -7224,11 +7917,26 @@ class ComparativeAnalyzer:
                     self.save_figure(fig28, "figure_28_phenotype_forest_plots_binary")
                     plt.close(fig28)
                     phenotype_figures.append("figure_28_phenotype_forest_plots_binary")
+                
+                # Figure 28a: Limited methods version (Truth, Method1, Method2 only)
+                fig28a = self.generate_figure_28a_phenotype_forest_plots_binary_limited(data, binary_results)
+                if fig28a is not None:
+                    self.save_figure(fig28a, "figure_28a_phenotype_forest_plots_binary_limited")
+                    plt.close(fig28a)
+                    phenotype_figures.append("figure_28a_phenotype_forest_plots_binary_limited")
+                
                 fig28c = self.generate_figure_28c_significance_contingency_binary(data, binary_results)
                 if fig28c is not None:
                     self.save_figure(fig28c, "figure_28c_significance_contingency_binary")
                     plt.close(fig28c)
                     phenotype_figures.append("figure_28c_significance_contingency_binary")
+                
+                # Figure 28d: Bonferroni correction version
+                fig28d = self.generate_figure_28d_significance_contingency_binary_bonferroni(data, binary_results)
+                if fig28d is not None:
+                    self.save_figure(fig28d, "figure_28d_significance_contingency_binary_bonferroni")
+                    plt.close(fig28d)
+                    phenotype_figures.append("figure_28d_significance_contingency_binary_bonferroni")
             except Exception as e:
                 print(f"    Error generating figure 28: {str(e)}")
         
@@ -7251,11 +7959,26 @@ class ComparativeAnalyzer:
                     self.save_figure(fig29, "figure_29_phenotype_forest_plots_continuous")
                     plt.close(fig29)
                     phenotype_figures.append("figure_29_phenotype_forest_plots_continuous")
+                
+                # Figure 29a: Limited methods version (Truth, Method1, Method2 only)
+                fig29a = self.generate_figure_29a_phenotype_forest_plots_continuous_limited(data, continuous_results)
+                if fig29a is not None:
+                    self.save_figure(fig29a, "figure_29a_phenotype_forest_plots_continuous_limited")
+                    plt.close(fig29a)
+                    phenotype_figures.append("figure_29a_phenotype_forest_plots_continuous_limited")
+                
                 fig29c = self.generate_figure_29c_significance_contingency_continuous(data, continuous_results)
                 if fig29c is not None:
                     self.save_figure(fig29c, "figure_29c_significance_contingency_continuous")
                     plt.close(fig29c)
                     phenotype_figures.append("figure_29c_significance_contingency_continuous")
+                
+                # Figure 29d: Bonferroni correction version
+                fig29d = self.generate_figure_29d_significance_contingency_continuous_bonferroni(data, continuous_results)
+                if fig29d is not None:
+                    self.save_figure(fig29d, "figure_29d_significance_contingency_continuous_bonferroni")
+                    plt.close(fig29d)
+                    phenotype_figures.append("figure_29d_significance_contingency_continuous_bonferroni")
             except Exception as e:
                 print(f"    Error generating figure 29: {str(e)}")
         
