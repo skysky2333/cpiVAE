@@ -2287,6 +2287,7 @@ class ComparativeAnalyzer:
         corr_results_raw = self._calculate_association_correlation_binary_per_feature(data, association_results)
         r2_results_raw = self._calculate_association_r_squared_binary_per_feature(data, association_results)
         
+        # Exclude only Method 4
         if data.method4_name:
             mae_results_raw = {k: v for k, v in mae_results_raw.items() if k != data.method4_name}
             corr_results_raw = {k: v for k, v in corr_results_raw.items() if k != data.method4_name}
@@ -2521,6 +2522,7 @@ class ComparativeAnalyzer:
         corr_results_raw = self._calculate_association_correlation_continuous_per_feature(data, association_results)
         r2_results_raw = self._calculate_association_r_squared_continuous_per_feature(data, association_results)
         
+        # Exclude only Method 4
         if data.method4_name:
             mae_results_raw = {k: v for k, v in mae_results_raw.items() if k != data.method4_name}
             corr_results_raw = {k: v for k, v in corr_results_raw.items() if k != data.method4_name}
@@ -3124,8 +3126,8 @@ class ComparativeAnalyzer:
         binary_df = scatter_df[scatter_df['phenotype_type'] == 'binary']
         continuous_df = scatter_df[scatter_df['phenotype_type'] == 'continuous']
         
-        # Create figure with 2x2 layout
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 12))
+        # Create figure with 3x2 layout
+        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(14, 18))
         
         # Top-left: Binary phenotype scatter plot
         ax1.set_title('Binary Phenotypes: Retention of Associations', fontweight='bold', fontsize=14)
@@ -3234,8 +3236,8 @@ class ComparativeAnalyzer:
         ax3.set_ylabel('Overall Recovery Rate (%)', fontsize=12)
         
         # Define bins for x-axis
-        bins = [0, 20, 40, np.inf]
-        bin_labels = ['1-20', '21-40', '41+']
+        bins = [0, 10, 20, 30, np.inf]
+        bin_labels = ['1-10', '11-20', '21-30', '30+']
         
         if not binary_df.empty:
             # Bin the data
@@ -3261,6 +3263,17 @@ class ComparativeAnalyzer:
             x = np.arange(len(bin_labels))
             width = 0.35  # Width for 2 bars
             
+            # Store recovery data for significance testing
+            bin_recovery_data = {bin_label: {method: [] for method in methods} for bin_label in bin_labels}
+            
+            # Collect individual recovery rates for each phenotype in each bin
+            for bin_label in bin_labels:
+                bin_phenos = binary_df[binary_df['bin'] == bin_label]
+                for method in methods:
+                    method_phenos = bin_phenos[bin_phenos['method'] == method]
+                    if not method_phenos.empty:
+                        bin_recovery_data[bin_label][method] = method_phenos['retention_rate'].values * 100
+            
             # Plot imputed methods
             for i, method in enumerate(methods):
                 method_data = bin_summary[bin_summary['method'] == method]
@@ -3285,6 +3298,42 @@ class ComparativeAnalyzer:
                         height = bar.get_height()
                         ax3.text(bar.get_x() + bar.get_width()/2., height + 1,
                                 f'n={n_assoc}', ha='center', va='bottom', fontsize=8)
+            
+            # Add significance testing between methods for each bin
+            if len(methods) == 2:
+                for bin_idx, bin_label in enumerate(bin_labels):
+                    m1_data = bin_recovery_data[bin_label][methods[0]]
+                    m2_data = bin_recovery_data[bin_label][methods[1]]
+                    
+                    if len(m1_data) > 0 and len(m2_data) > 0:
+                        if len(m1_data) == len(m2_data) and len(m1_data) >= 3:
+                            # Wilcoxon signed-rank test for paired data
+                            try:
+                                _, p_val = wilcoxon(m1_data, m2_data, alternative='two-sided')
+                            except:
+                                # Fall back to Mann-Whitney U if wilcoxon fails
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
+                        else:
+                            # Mann-Whitney U test for unpaired data
+                            from scipy.stats import mannwhitneyu
+                            _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
+                        
+                        # Determine significance symbol
+                        if p_val < 0.001:
+                            sig_symbol = '***'
+                        elif p_val < 0.01:
+                            sig_symbol = '**'
+                        elif p_val < 0.05:
+                            sig_symbol = '*'
+                        else:
+                            sig_symbol = 'ns'
+                        
+                        # Add significance annotation above the bars
+                        y_max = max([bin_summary[(bin_summary['bin'] == bin_label) & 
+                                                (bin_summary['method'].isin(methods))]['overall_recovery_rate'].max(),
+                                   5])  # At least 5 for visibility
+                        ax3.text(bin_idx, y_max + 8, sig_symbol, ha='center', fontsize=10, fontweight='bold')
             
             ax3.set_xticks(x)
             ax3.set_xticklabels(bin_labels)
@@ -3323,6 +3372,17 @@ class ComparativeAnalyzer:
             x = np.arange(len(bin_labels))
             width = 0.35  # Width for 2 bars
             
+            # Store recovery data for significance testing
+            bin_recovery_data_cont = {bin_label: {method: [] for method in methods_cont} for bin_label in bin_labels}
+            
+            # Collect individual recovery rates for each phenotype in each bin
+            for bin_label in bin_labels:
+                bin_phenos = continuous_df[continuous_df['bin'] == bin_label]
+                for method in methods_cont:
+                    method_phenos = bin_phenos[bin_phenos['method'] == method]
+                    if not method_phenos.empty:
+                        bin_recovery_data_cont[bin_label][method] = method_phenos['retention_rate'].values * 100
+            
             # Plot imputed methods
             for i, method in enumerate(methods_cont):
                 method_data = bin_summary_cont[bin_summary_cont['method'] == method]
@@ -3348,6 +3408,42 @@ class ComparativeAnalyzer:
                         ax4.text(bar.get_x() + bar.get_width()/2., height + 1,
                                 f'n={n_assoc}', ha='center', va='bottom', fontsize=8)
             
+            # Add significance testing between methods for each bin
+            if len(methods_cont) == 2:
+                for bin_idx, bin_label in enumerate(bin_labels):
+                    m1_data = bin_recovery_data_cont[bin_label][methods_cont[0]]
+                    m2_data = bin_recovery_data_cont[bin_label][methods_cont[1]]
+                    
+                    if len(m1_data) > 0 and len(m2_data) > 0:
+                        if len(m1_data) == len(m2_data) and len(m1_data) >= 3:
+                            # Wilcoxon signed-rank test for paired data
+                            try:
+                                _, p_val = wilcoxon(m1_data, m2_data, alternative='two-sided')
+                            except:
+                                # Fall back to Mann-Whitney U if wilcoxon fails
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
+                        else:
+                            # Mann-Whitney U test for unpaired data
+                            from scipy.stats import mannwhitneyu
+                            _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
+                        
+                        # Determine significance symbol
+                        if p_val < 0.001:
+                            sig_symbol = '***'
+                        elif p_val < 0.01:
+                            sig_symbol = '**'
+                        elif p_val < 0.05:
+                            sig_symbol = '*'
+                        else:
+                            sig_symbol = 'ns'
+                        
+                        # Add significance annotation above the bars
+                        y_max = max([bin_summary_cont[(bin_summary_cont['bin'] == bin_label) & 
+                                                      (bin_summary_cont['method'].isin(methods_cont))]['overall_recovery_rate'].max(),
+                                   5])  # At least 5 for visibility
+                        ax4.text(bin_idx, y_max + 8, sig_symbol, ha='center', fontsize=10, fontweight='bold')
+            
             ax4.set_xticks(x)
             ax4.set_xticklabels(bin_labels)
             ax4.legend(loc='upper right', fontsize=10)
@@ -3355,6 +3451,85 @@ class ComparativeAnalyzer:
             ax4.set_ylim(0, 105)
         else:
             ax4.text(0.5, 0.5, 'No continuous phenotype data', ha='center', va='center', transform=ax4.transAxes)
+        
+        # Third row: Recovery rate scatter plots
+        # Bottom-left: Binary phenotype recovery rate scatter
+        ax5.set_title('Binary Phenotypes: Recovery Rate vs Association Count', fontweight='bold', fontsize=14)
+        ax5.set_xlabel('Number of Significant Associations in Truth Data', fontsize=12)
+        ax5.set_ylabel('Recovery Rate (%)', fontsize=12)
+        ax5.set_xscale('log')
+        
+        if not binary_df.empty:
+            # Get unique methods and sort to ensure Method1 is plotted last
+            methods = list(binary_df['method'].unique())
+            # Move Method1 to the end if it exists
+            if data.method1_name in methods:
+                methods.remove(data.method1_name)
+                methods.append(data.method1_name)
+            
+            for method in methods:
+                method_data = binary_df[binary_df['method'] == method]
+                ax5.scatter(method_data['n_truth_sig'], 
+                           method_data['retention_rate'] * 100,  # Convert to percentage
+                           label=method,
+                           color=method_colors.get(method, 'gray'),
+                           alpha=0.7,
+                           s=50,
+                           edgecolor='black',
+                           linewidth=0.5)
+            
+            # Add reference lines
+            max_val_binary = binary_df['n_truth_sig'].max() if not binary_df.empty else 100
+            min_val_binary = max(1, binary_df['n_truth_sig'].min()) if not binary_df.empty else 1
+            x_vals = np.logspace(np.log10(min_val_binary), np.log10(max_val_binary), 100)
+            ax5.axhline(y=100, color='k', linestyle='--', alpha=0.3, label='100% Recovery')
+            ax5.axhline(y=50, color='k', linestyle=':', alpha=0.3, label='50% Recovery')
+            
+            ax5.legend(loc='lower right', fontsize=10)
+            ax5.grid(True, alpha=0.3, which='both')
+            ax5.set_xlim(left=max(0.9, min_val_binary * 0.9), right=max_val_binary * 1.5)
+            ax5.set_ylim(0, 105)
+        else:
+            ax5.text(0.5, 0.5, 'No binary phenotype data', ha='center', va='center', transform=ax5.transAxes)
+        
+        # Bottom-right: Continuous phenotype recovery rate scatter
+        ax6.set_title('Continuous Phenotypes: Recovery Rate vs Association Count', fontweight='bold', fontsize=14)
+        ax6.set_xlabel('Number of Significant Associations in Truth Data', fontsize=12)
+        ax6.set_ylabel('Recovery Rate (%)', fontsize=12)
+        ax6.set_xscale('log')
+        
+        if not continuous_df.empty:
+            # Get unique methods and sort to ensure Method1 is plotted last
+            methods = list(continuous_df['method'].unique())
+            # Move Method1 to the end if it exists
+            if data.method1_name in methods:
+                methods.remove(data.method1_name)
+                methods.append(data.method1_name)
+            
+            for method in methods:
+                method_data = continuous_df[continuous_df['method'] == method]
+                ax6.scatter(method_data['n_truth_sig'], 
+                           method_data['retention_rate'] * 100,  # Convert to percentage
+                           label=method,
+                           color=method_colors.get(method, 'gray'),
+                           alpha=0.7,
+                           s=50,
+                           edgecolor='black',
+                           linewidth=0.5)
+            
+            # Add reference lines
+            max_val_cont = continuous_df['n_truth_sig'].max() if not continuous_df.empty else 100
+            min_val_cont = max(1, continuous_df['n_truth_sig'].min()) if not continuous_df.empty else 1
+            x_vals = np.logspace(np.log10(min_val_cont), np.log10(max_val_cont), 100)
+            ax6.axhline(y=100, color='k', linestyle='--', alpha=0.3, label='100% Recovery')
+            ax6.axhline(y=50, color='k', linestyle=':', alpha=0.3, label='50% Recovery')
+            
+            ax6.legend(loc='lower right', fontsize=10)
+            ax6.grid(True, alpha=0.3, which='both')
+            ax6.set_xlim(left=max(0.9, min_val_cont * 0.9), right=max_val_cont * 1.5)
+            ax6.set_ylim(0, 105)
+        else:
+            ax6.text(0.5, 0.5, 'No continuous phenotype data', ha='center', va='center', transform=ax6.transAxes)
         
         fig.suptitle('Association Discovery and Retention Analysis Across All Phenotypes', 
                     fontsize=16, fontweight='bold')
@@ -4899,7 +5074,8 @@ class ComparativeAnalyzer:
 
                                     y = y_start + y_step * comparison_idx
                                     x1, x2 = positions[i], positions[j]
-                                    ax.plot([x1, x1, x2, x2], [y - 0.005, y, y, y - 0.005], 'k-', linewidth=1)
+                                    # Draw only the horizontal line, no vertical ends
+                                    ax.plot([x1, x2], [y, y], 'k-', linewidth=1)
                                     ax.text((x1 + x2) / 2.0, y + 0.01, sig_text, ha='center', va='bottom', fontsize=8)
                                     comparison_idx += 1
                                 except Exception as e:
@@ -5758,28 +5934,26 @@ class ComparativeAnalyzer:
     
     
     def generate_figure_9_umap_concordance(self, data: AnalysisData):
-        """Figure 9: PCA and UMAP analysis - structure preservation assessment"""
-        print("Generating Figure 9: Structure preservation analysis (PCA/UMAP)...")
+        """Figure 9: PCA analysis - structure preservation assessment with separate plots"""
+        print("Generating Figure 9: Structure preservation analysis (PCA with separate plots)...")
         
         # Fit dimensionality reduction models on combined data, then transform each dataset
         # This shows the global structure across all datasets
         
         try:
-            # Prepare datasets for UMAP (samples as observations)
+            # Prepare datasets for PCA (samples as observations)
             sample_data_list = []
             labels = []
             platforms = []
             data_types = []
             
-            # Platform A datasets only (exclude Method 4 as it's a permuted baseline)
+            # Platform A datasets only - use Truth, Method 1, and Method 2 (exclude Method 3 and 4)
             platform_a_datasets = {
                 'Truth_A': data.truth_a,
                 f'{data.method1_name}_A': data.imp_a_m1,
                 f'{data.method2_name}_A': data.imp_a_m2,
             }
-            if data.imp_a_m3 is not None and data.method3_name is not None:
-                platform_a_datasets[f'{data.method3_name}_A'] = data.imp_a_m3
-            # Skip Method 4 - it's a permuted baseline not suitable for structure analysis
+            # Exclude Method 3 and Method 4
             
             # Process Platform A only
             for platform_name, datasets_dict in [('Platform_A', platform_a_datasets)]:
@@ -5828,12 +6002,21 @@ class ComparativeAnalyzer:
                 ax.set_title('Dimensionality Reduction Concordance')
                 return fig
             
-            # Create plots for Platform A with both PCA and UMAP, plus variance analysis
-            fig, ((ax_pca, ax_umap), (ax_var_feat, ax_var_samp)) = plt.subplots(2, 2, figsize=(12, 12))
-            fig.suptitle(f'Structure Preservation Assessment: PCA/UMAP and Variance Analysis - {data.platform_a_name}\n(Models fitted on combined data)', 
-                        fontsize=14, fontweight='bold')
+            # Create plots for Platform A with 3 separate PCA plots plus variance analysis
+            fig = plt.figure(figsize=(16, 10))
+            gs = GridSpec(2, 3, figure=fig, height_ratios=[1.5, 1])
             
-            type_markers = {'Truth': 'o', 'Imputed': '^'}
+            # Top row: 3 separate PCA plots
+            ax_pca_truth = fig.add_subplot(gs[0, 0])
+            ax_pca_m1 = fig.add_subplot(gs[0, 1])
+            ax_pca_m2 = fig.add_subplot(gs[0, 2])
+            
+            # Bottom row: variance analysis
+            ax_var_feat = fig.add_subplot(gs[1, 0])
+            ax_var_samp = fig.add_subplot(gs[1, 1])
+            
+            fig.suptitle(f'Structure Preservation Assessment: PCA Analysis - {data.platform_a_name}\n(Separate plots with shared axes)', 
+                        fontsize=14, fontweight='bold')
             
             # Process Platform A only
             platform_key = 'Platform_A'
@@ -5874,106 +6057,90 @@ class ComparativeAnalyzer:
                 pca = PCA(n_components=2, random_state=42)
                 pca_embedding_all = pca.fit_transform(scaled_all_data)
                 
-                # Fit UMAP on combined data
-                reducer = umap.UMAP(n_components=2, metric='cosine', random_state=42, n_neighbors=15)
-                umap_embedding_all = reducer.fit_transform(scaled_all_data)
-                
                 # Transform each dataset separately for comparison
                 pca_embeddings = []
-                umap_embeddings = []
                 
                 for data_matrix in platform_sample_data:
                     # Scale using the same scaler fitted on combined data
                     scaled_data = scaler.transform(data_matrix)
                     
-                    # Transform using fitted PCA and UMAP
+                    # Transform using fitted PCA
                     pca_transformed = pca.transform(scaled_data)
-                    umap_transformed = reducer.transform(scaled_data)
                     
                     pca_embeddings.append(pca_transformed)
-                    umap_embeddings.append(umap_transformed)
                 
-                # Combine all embeddings for plotting
-                pca_embedding = np.vstack(pca_embeddings)
-                umap_embedding = np.vstack(umap_embeddings)
+                # Separate embeddings for each dataset
+                truth_pca = pca_embeddings[0]
+                method1_pca = pca_embeddings[1]
+                method2_pca = pca_embeddings[2]
                 
-                # Plot setup
-                unique_labels = list(set(platform_labels))
-                colors = plt.cm.Set3(np.linspace(0, 1, len(unique_labels)))
+                # Determine common axis limits for all 3 PCA plots
+                all_pca = np.vstack([truth_pca, method1_pca, method2_pca])
+                x_min, x_max = all_pca[:, 0].min(), all_pca[:, 0].max()
+                y_min, y_max = all_pca[:, 1].min(), all_pca[:, 1].max()
+                x_margin = (x_max - x_min) * 0.1
+                y_margin = (y_max - y_min) * 0.1
+                xlim = (x_min - x_margin, x_max + x_margin)
+                ylim = (y_min - y_margin, y_max + y_margin)
                 
-                # PCA plot (left)
-                plotted_labels = set()
-                for i, (label, data_type) in enumerate(zip(platform_labels, platform_types)):
-                    label_idx = unique_labels.index(label)
-                    marker = type_markers[data_type]
-                    
-                    ax_pca.scatter(pca_embedding[i, 0], pca_embedding[i, 1],
-                                 c=[colors[label_idx]], s=30, alpha=0.7, 
-                                 marker=marker, label=f'{label}' if label not in plotted_labels else "")
-                    plotted_labels.add(label)
+                # Common color for all plots
+                plot_color = NATURE_COLORS['neutral']
                 
-                ax_pca.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
-                ax_pca.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
-                ax_pca.set_title(f'PCA - {data.platform_a_name}')
-                ax_pca.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-                ax_pca.grid(True, alpha=0.3)
+                # Plot Truth PCA (left)
+                ax_pca_truth.scatter(truth_pca[:, 0], truth_pca[:, 1],
+                                   c=plot_color, s=30, alpha=0.7, 
+                                   edgecolors='black', linewidth=0.5)
+                ax_pca_truth.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+                ax_pca_truth.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+                ax_pca_truth.set_title(f'Truth - {data.platform_a_name}')
+                ax_pca_truth.set_xlim(xlim)
+                ax_pca_truth.set_ylim(ylim)
+                ax_pca_truth.grid(True, alpha=0.3)
                 
-                # UMAP plot (right)
-                plotted_labels_umap = set()
-                for i, (label, data_type) in enumerate(zip(platform_labels, platform_types)):
-                    label_idx = unique_labels.index(label)
-                    marker = type_markers[data_type]
-                    
-                    ax_umap.scatter(umap_embedding[i, 0], umap_embedding[i, 1],
-                                  c=[colors[label_idx]], s=30, alpha=0.7, 
-                                  marker=marker, label=f'{label}' if label not in plotted_labels_umap else "")
-                    plotted_labels_umap.add(label)
+                # Plot Method 1 PCA (middle)
+                ax_pca_m1.scatter(method1_pca[:, 0], method1_pca[:, 1],
+                                c=NATURE_COLORS['primary'], s=30, alpha=0.7, 
+                                edgecolors='black', linewidth=0.5)
+                ax_pca_m1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+                ax_pca_m1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+                ax_pca_m1.set_title(f'{data.method1_name} - {data.platform_a_name}')
+                ax_pca_m1.set_xlim(xlim)
+                ax_pca_m1.set_ylim(ylim)
+                ax_pca_m1.grid(True, alpha=0.3)
                 
-                ax_umap.set_xlabel('UMAP 1')
-                ax_umap.set_ylabel('UMAP 2')
-                ax_umap.set_title(f'UMAP - {data.platform_a_name}')
-                ax_umap.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-                ax_umap.grid(True, alpha=0.3)
+                # Plot Method 2 PCA (right)
+                ax_pca_m2.scatter(method2_pca[:, 0], method2_pca[:, 1],
+                                c=NATURE_COLORS['secondary'], s=30, alpha=0.7, 
+                                edgecolors='black', linewidth=0.5)
+                ax_pca_m2.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+                ax_pca_m2.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+                ax_pca_m2.set_title(f'{data.method2_name} - {data.platform_a_name}')
+                ax_pca_m2.set_xlim(xlim)
+                ax_pca_m2.set_ylim(ylim)
+                ax_pca_m2.grid(True, alpha=0.3)
                 
                 # Calculate variance in PC coordinates for bottom panels
                 # We'll compare the variance captured by each method vs truth
                 
-                # Get the truth PCA coordinates
-                truth_idx_start = 0
-                truth_idx_end = platform_sample_data[0].shape[0]
-                truth_pca_coords = pca_embedding[truth_idx_start:truth_idx_end, :]
-                
                 # Calculate variance in truth for PC1 and PC2
-                truth_pc1_var = np.var(truth_pca_coords[:, 0])
-                truth_pc2_var = np.var(truth_pca_coords[:, 1])
+                truth_pc1_var = np.var(truth_pca[:, 0])
+                truth_pc2_var = np.var(truth_pca[:, 1])
                 truth_total_var = truth_pc1_var + truth_pc2_var  # Total variance (PC1 + PC2)
                 
+                # Calculate variance for Method 1
+                method1_pc1_var = np.var(method1_pca[:, 0])
+                method1_pc2_var = np.var(method1_pca[:, 1])
+                method1_total_var = method1_pc1_var + method1_pc2_var
+                
+                # Calculate variance for Method 2
+                method2_pc1_var = np.var(method2_pca[:, 0])
+                method2_pc2_var = np.var(method2_pca[:, 1])
+                method2_total_var = method2_pc1_var + method2_pc2_var
+                
                 # Store method names and their variances
-                method_names = []
-                total_variances = []  # PC1 + PC2 combined
-                pc2_variances = []
-                
-                # Track the current index in the combined embedding
-                current_idx = truth_idx_end
-                
-                # Process each imputation method
-                for i, (name, dataset) in enumerate(list(datasets_dict.items())[1:]):  # Skip truth
-                    if 'Truth' not in name:
-                        method_samples = dataset.shape[1]
-                        method_pca_coords = pca_embedding[current_idx:current_idx + method_samples, :]
-                        
-                        # Calculate variance for this method
-                        method_pc1_var = np.var(method_pca_coords[:, 0])
-                        method_pc2_var = np.var(method_pca_coords[:, 1])
-                        method_total_var = method_pc1_var + method_pc2_var  # Total variance
-                        
-                        # Extract method name without platform suffix
-                        clean_name = name.replace('_A', '')
-                        method_names.append(clean_name)
-                        total_variances.append(method_total_var)
-                        pc2_variances.append(method_pc2_var)
-                        
-                        current_idx += method_samples
+                method_names = [data.method1_name, data.method2_name]
+                total_variances = [method1_total_var, method2_total_var]
+                pc2_variances = [method1_pc2_var, method2_pc2_var]
                 
                 # Plot total variance comparison (PC1 + PC2) (bottom left)
                 if total_variances:
@@ -6012,10 +6179,14 @@ class ComparativeAnalyzer:
                                     transform=ax_var_feat.transAxes,
                                     fontsize=8, verticalalignment='top',
                                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    
+                    # Make the plot square
+                    ax_var_feat.set_box_aspect(1)
                 else:
                     ax_var_feat.text(0.5, 0.5, 'No total variance data available', 
                                     ha='center', va='center', transform=ax_var_feat.transAxes)
                     ax_var_feat.set_title('Total Variance Comparison (PC1 + PC2)')
+                    ax_var_feat.set_box_aspect(1)
                 
                 # Plot PC2 variance comparison (bottom right)
                 if pc2_variances:
@@ -6054,28 +6225,38 @@ class ComparativeAnalyzer:
                                     transform=ax_var_samp.transAxes,
                                     fontsize=8, verticalalignment='top',
                                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    
+                    # Make the plot square
+                    ax_var_samp.set_box_aspect(1)
                 else:
                     ax_var_samp.text(0.5, 0.5, 'No PC2 variance data available', 
                                     ha='center', va='center', transform=ax_var_samp.transAxes)
                     ax_var_samp.set_title('PC2 Variance Comparison')
+                    ax_var_samp.set_box_aspect(1)
                     
             else:
                 # No data available
-                ax_pca.text(0.5, 0.5, f'No data for {data.platform_a_name}', 
-                          ha='center', va='center', transform=ax_pca.transAxes, fontsize=12)
-                ax_pca.set_title(f'PCA - {data.platform_a_name}')
+                ax_pca_truth.text(0.5, 0.5, f'No data for Truth - {data.platform_a_name}', 
+                          ha='center', va='center', transform=ax_pca_truth.transAxes, fontsize=12)
+                ax_pca_truth.set_title(f'Truth - {data.platform_a_name}')
                 
-                ax_umap.text(0.5, 0.5, f'No data for {data.platform_a_name}', 
-                           ha='center', va='center', transform=ax_umap.transAxes, fontsize=12)
-                ax_umap.set_title(f'UMAP - {data.platform_a_name}')
+                ax_pca_m1.text(0.5, 0.5, f'No data for {data.method1_name}', 
+                           ha='center', va='center', transform=ax_pca_m1.transAxes, fontsize=12)
+                ax_pca_m1.set_title(f'{data.method1_name} - {data.platform_a_name}')
+                
+                ax_pca_m2.text(0.5, 0.5, f'No data for {data.method2_name}', 
+                           ha='center', va='center', transform=ax_pca_m2.transAxes, fontsize=12)
+                ax_pca_m2.set_title(f'{data.method2_name} - {data.platform_a_name}')
                 
                 ax_var_feat.text(0.5, 0.5, 'No data available', 
                                ha='center', va='center', transform=ax_var_feat.transAxes)
                 ax_var_feat.set_title('Total Variance Comparison (PC1 + PC2)')
+                ax_var_feat.set_box_aspect(1)
                 
                 ax_var_samp.text(0.5, 0.5, 'No data available', 
                                ha='center', va='center', transform=ax_var_samp.transAxes)
                 ax_var_samp.set_title('PC2 Variance Comparison')
+                ax_var_samp.set_box_aspect(1)
             
             plt.tight_layout()
             return fig
@@ -6086,6 +6267,166 @@ class ComparativeAnalyzer:
             ax.text(0.5, 0.5, f'Error in PCA/UMAP analysis:\n{str(e)}', 
                    ha='center', va='center', transform=ax.transAxes, fontsize=12)
             ax.set_title('Dimensionality Reduction Concordance')
+            return fig
+    
+    def generate_figure_9a_feature_level_pca_no_clustering(self, data: AnalysisData):
+        """Figure 9a: Feature-level PCA analysis with truth-based clustering - 3 separate plots"""
+        print("Generating Figure 9a: Feature-level PCA analysis with truth clustering (3 separate plots)...")
+        
+        try:
+            # Only use Truth, Method 1, and Method 2
+            if data.imp_a_m1 is None or data.imp_a_m2 is None:
+                print("    Insufficient methods available - need Method 1 and Method 2")
+                fig, ax = plt.subplots(figsize=(8, 8))
+                ax.text(0.5, 0.5, 'Need Method 1 and Method 2 for feature-level PCA analysis', 
+                       ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                ax.set_title('Feature-level PCA Analysis')
+                return fig
+            
+            # Create figure: 1 row, 3 columns for Truth, Method 1, Method 2
+            fig, (ax_truth, ax_m1, ax_m2) = plt.subplots(1, 3, figsize=(15, 5))
+            
+            fig.suptitle(f'Feature-level PCA Analysis: {data.platform_a_name}\n(Each point is a feature/protein, colored by truth clusters)', 
+                        fontsize=14, fontweight='bold')
+            
+            # Prepare feature data (features × samples)
+            truth_features = data.truth_a.values
+            method1_features = data.imp_a_m1.values
+            method2_features = data.imp_a_m2.values
+            
+            # Handle NaN values by replacing with feature means
+            truth_clean = truth_features.copy()
+            method1_clean = method1_features.copy()
+            method2_clean = method2_features.copy()
+            
+            # Replace NaNs with row means (feature means across samples)
+            for j in range(truth_clean.shape[0]):
+                truth_row_mean = np.nanmean(truth_clean[j, :])
+                method1_row_mean = np.nanmean(method1_clean[j, :])
+                method2_row_mean = np.nanmean(method2_clean[j, :])
+                
+                if not np.isnan(truth_row_mean):
+                    truth_clean[j, np.isnan(truth_clean[j, :])] = truth_row_mean
+                else:
+                    truth_clean[j, :] = 0
+                if not np.isnan(method1_row_mean):
+                    method1_clean[j, np.isnan(method1_clean[j, :])] = method1_row_mean
+                else:
+                    method1_clean[j, :] = 0
+                if not np.isnan(method2_row_mean):
+                    method2_clean[j, np.isnan(method2_clean[j, :])] = method2_row_mean
+                else:
+                    method2_clean[j, :] = 0
+            
+            # Perform K-means clustering on truth data to get cluster labels
+            # Scale truth features for clustering
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.cluster import KMeans
+            
+            scaler = StandardScaler()
+            truth_scaled = scaler.fit_transform(truth_clean)
+            
+            # Determine optimal number of clusters (between 3 and 6 for better visibility)
+            n_features = truth_scaled.shape[0]
+            optimal_k = min(max(3, n_features // 30), 6)  # Fewer clusters for better visualization
+            
+            # Perform K-means clustering
+            kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
+            cluster_labels = kmeans.fit_predict(truth_scaled)
+            
+            print(f"    K-means clustering: {optimal_k} clusters for {n_features} features")
+            
+            # Create cluster color mapping
+            cluster_colors = plt.cm.Set3(np.linspace(0, 1, optimal_k))
+            feature_colors = [cluster_colors[label] for label in cluster_labels]
+            
+            # Create combined data for fitting PCA
+            all_features = np.vstack([truth_clean, method1_clean, method2_clean])
+            
+            # Apply dimensionality reduction if we have too many dimensions
+            n_features_current, n_dims = all_features.shape
+            if n_dims > 100:  # Reduce dimensions first if too high
+                from sklearn.decomposition import PCA as PCA_prep
+                pca_prep = PCA_prep(n_components=min(50, n_features_current-1), random_state=42)
+                all_features = pca_prep.fit_transform(all_features)
+                
+                # Transform individual datasets
+                truth_for_pca = pca_prep.transform(truth_clean)
+                method1_for_pca = pca_prep.transform(method1_clean)
+                method2_for_pca = pca_prep.transform(method2_clean)
+            else:
+                truth_for_pca = truth_clean
+                method1_for_pca = method1_clean
+                method2_for_pca = method2_clean
+            
+            # Fit PCA on combined data
+            pca = PCA(n_components=2, random_state=42)
+            pca.fit(all_features)
+            
+            # Transform each dataset
+            pca_truth = pca.transform(truth_for_pca)
+            pca_method1 = pca.transform(method1_for_pca)
+            pca_method2 = pca.transform(method2_for_pca)
+            
+            # Determine common axis limits for all 3 plots
+            all_pca = np.vstack([pca_truth, pca_method1, pca_method2])
+            x_min, x_max = all_pca[:, 0].min(), all_pca[:, 0].max()
+            y_min, y_max = all_pca[:, 1].min(), all_pca[:, 1].max()
+            x_margin = (x_max - x_min) * 0.1
+            y_margin = (y_max - y_min) * 0.1
+            xlim = (x_min - x_margin, x_max + x_margin)
+            ylim = (y_min - y_margin, y_max + y_margin)
+            
+            # Plot Truth PCA (left) - colored by clusters
+            ax_truth.scatter(pca_truth[:, 0], pca_truth[:, 1],
+                           c=feature_colors, alpha=0.7, s=40,
+                           edgecolors='black', linewidth=0.3)
+            ax_truth.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+            ax_truth.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+            ax_truth.set_title('Truth')
+            ax_truth.set_xlim(xlim)
+            ax_truth.set_ylim(ylim)
+            ax_truth.grid(True, alpha=0.3)
+            
+            # Plot Method 1 PCA (middle) - colored by truth clusters
+            ax_m1.scatter(pca_method1[:, 0], pca_method1[:, 1],
+                        c=feature_colors, alpha=0.7, s=40,
+                        edgecolors='black', linewidth=0.3)
+            ax_m1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+            ax_m1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+            ax_m1.set_title(data.method1_name)
+            ax_m1.set_xlim(xlim)
+            ax_m1.set_ylim(ylim)
+            ax_m1.grid(True, alpha=0.3)
+            
+            # Plot Method 2 PCA (right) - colored by truth clusters
+            ax_m2.scatter(pca_method2[:, 0], pca_method2[:, 1],
+                        c=feature_colors, alpha=0.7, s=40,
+                        edgecolors='black', linewidth=0.3)
+            ax_m2.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+            ax_m2.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+            ax_m2.set_title(data.method2_name)
+            ax_m2.set_xlim(xlim)
+            ax_m2.set_ylim(ylim)
+            ax_m2.grid(True, alpha=0.3)
+            
+            # Add legend for clusters on the rightmost plot
+            from matplotlib.patches import Patch
+            legend_elements = []
+            for cluster_id in range(optimal_k):
+                legend_elements.append(Patch(facecolor=cluster_colors[cluster_id], 
+                                           edgecolor='black', label=f'Cluster {cluster_id+1}'))
+            ax_m2.legend(handles=legend_elements, loc='best', fontsize=8, title='Truth Clusters')
+            
+            plt.tight_layout()
+            return fig
+            
+        except Exception as e:
+            print(f"    Error in feature-level PCA analysis: {e}")
+            fig, ax = plt.subplots(figsize=(8, 8))
+            ax.text(0.5, 0.5, f'Error in feature-level PCA analysis:\n{str(e)}', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=12)
+            ax.set_title('Feature-level PCA Analysis')
             return fig
     
     def generate_figure_9b_feature_level_umap_pca(self, data: AnalysisData):
@@ -7715,6 +8056,7 @@ class ComparativeAnalyzer:
             ("figure_8_global_correlation_heatmap", self.generate_figure_8_global_correlation_heatmap),
             # Figure 9 variants
             ("figure_9_umap_concordance", self.generate_figure_9_umap_concordance),
+            ("figure_9a_feature_level_pca_no_clustering", self.generate_figure_9a_feature_level_pca_no_clustering),
             ("figure_9b_feature_level_umap_pca", self.generate_figure_9b_feature_level_umap_pca),
             ("figure_9c_feature_level_umap_pca_knn_clusters", self.generate_figure_9c_feature_level_umap_pca_knn_clusters),
             ("figure_9d_method_comparison_with_connections", self.generate_figure_9d_method_comparison_with_connections),

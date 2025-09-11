@@ -2845,16 +2845,12 @@ class ComparativeAnalyzer:
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=9)
 
-        # Platform A
+        # Platform A - Only include Method 1 and Method 2
         platform_a_methods = []
         if data.imp_a_m1 is not None:
             platform_a_methods.append((data.imp_a_m1, data.method1_name))
         if data.imp_a_m2 is not None:
             platform_a_methods.append((data.imp_a_m2, data.method2_name))
-        if getattr(data, 'imp_a_m3', None) is not None and getattr(data, 'method3_name', None) is not None:
-            platform_a_methods.append((data.imp_a_m3, data.method3_name))
-        if getattr(data, 'imp_a_m4', None) is not None and getattr(data, 'method4_name', None) is not None:
-            platform_a_methods.append((data.imp_a_m4, data.method4_name))
 
         # Feature-wise (rows = features)
         a_feat_matrices = [data.truth_a.values] + [m.values for m, _ in platform_a_methods]
@@ -2866,16 +2862,12 @@ class ComparativeAnalyzer:
         a_samp_labels = ['Truth'] + [name for _, name in platform_a_methods]
         plot_mv(axes[0, 1], a_samp_matrices, a_samp_labels, f'{data.platform_a_name} - Sample-wise')
 
-        # Platform B
+        # Platform B - Only include Method 1 and Method 2
         platform_b_methods = []
         if data.imp_b_m1 is not None:
             platform_b_methods.append((data.imp_b_m1, data.method1_name))
         if data.imp_b_m2 is not None:
             platform_b_methods.append((data.imp_b_m2, data.method2_name))
-        if getattr(data, 'imp_b_m3', None) is not None and getattr(data, 'method3_name', None) is not None:
-            platform_b_methods.append((data.imp_b_m3, data.method3_name))
-        if getattr(data, 'imp_b_m4', None) is not None and getattr(data, 'method4_name', None) is not None:
-            platform_b_methods.append((data.imp_b_m4, data.method4_name))
 
         if len(platform_b_methods) or data.truth_b is not None:
             b_feat_matrices = [data.truth_b.values] + [m.values for m, _ in platform_b_methods]
@@ -6431,27 +6423,74 @@ class ComparativeAnalyzer:
                           label=data.method2_name, color=NATURE_COLORS['secondary'], 
                           capsize=5, alpha=0.8)
             
-            # Add difference line plot on secondary axis
-            ax2 = ax.twinx()
-            line = ax2.plot(x, differences, 'ko-', linewidth=2, markersize=8, 
-                           label=f'Difference ({data.method1_name} - {data.method2_name})')
-            ax2.errorbar(x, differences, yerr=diff_stds, fmt='none', ecolor='black', 
-                        capsize=5, alpha=0.6)
-            ax2.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
-            ax2.set_ylabel(f'Performance Difference ({data.method1_name} - {data.method2_name})', fontsize=11)
+            # Store data for statistical testing
+            method1_data_by_group = []
+            method2_data_by_group = []
+            
+            for group in concordance_groups:
+                group_data = platform_data[platform_data['concordance_group'] == group]
+                if len(group_data) > 0:
+                    method1_by_feature = group_data[group_data['method'] == 'Method_1'].set_index('feature')['r']
+                    method2_by_feature = group_data[group_data['method'] == 'Method_2'].set_index('feature')['r']
+                    common_features = method1_by_feature.index.intersection(method2_by_feature.index)
+                    if len(common_features) > 0:
+                        method1_data_by_group.append(method1_by_feature.loc[common_features].values)
+                        method2_data_by_group.append(method2_by_feature.loc[common_features].values)
+                    else:
+                        method1_data_by_group.append(np.array([]))
+                        method2_data_by_group.append(np.array([]))
+                else:
+                    method1_data_by_group.append(np.array([]))
+                    method2_data_by_group.append(np.array([]))
             
             # Add sample counts above bars
-            for j, (count, diff) in enumerate(zip(group_counts, differences)):
+            for j, count in enumerate(group_counts):
                 if count > 0:
                     # Add count annotation
-                    ax.text(j, max(method1_means[j], method2_means[j]) + 0.05, 
+                    ax.text(j, max(method1_means[j], method2_means[j]) + 0.02, 
                            f'n={count}', ha='center', fontsize=9)
-                    
-                    # Add significance indicator if difference is substantial
-                    if abs(diff) > 0.05:  # Threshold for "substantial" difference
-                        significance = '*' if abs(diff) > 0.1 else ''
-                        ax2.text(j, diff + np.sign(diff) * 0.02, significance, 
-                                ha='center', fontsize=12, fontweight='bold')
+            
+            # Add significance bars between methods within each concordance group
+            from scipy.stats import mannwhitneyu, ttest_rel
+            
+            # Find the maximum y value for positioning significance bars
+            max_y = max(max(method1_means), max(method2_means))
+            y_increment = 0.05
+            
+            # Test between Method 1 and Method 2 within each concordance group
+            for group_idx, group_name in enumerate(concordance_groups):
+                if len(method1_data_by_group[group_idx]) > 0 and len(method2_data_by_group[group_idx]) > 0:
+                    try:
+                        # Since we have paired data (same features), use paired t-test
+                        if len(method1_data_by_group[group_idx]) == len(method2_data_by_group[group_idx]) and len(method1_data_by_group[group_idx]) > 1:
+                            _, p_value = ttest_rel(method1_data_by_group[group_idx], method2_data_by_group[group_idx])
+                        else:
+                            # Fall back to Mann-Whitney U test if not paired or too few samples
+                            _, p_value = mannwhitneyu(method1_data_by_group[group_idx], method2_data_by_group[group_idx], alternative='two-sided')
+                        
+                        # Determine significance level
+                        if p_value < 0.001:
+                            sig_text = '***'
+                        elif p_value < 0.01:
+                            sig_text = '**'
+                        elif p_value < 0.05:
+                            sig_text = '*'
+                        else:
+                            sig_text = 'ns'
+                        
+                        # Draw significance bar between the two method bars for this group
+                        y = max_y + 0.08
+                        x1 = group_idx - width/2  # Method 1 position
+                        x2 = group_idx + width/2  # Method 2 position
+                        
+                        # Draw a simple horizontal line
+                        ax.plot([x1, x2], [y, y], 'k-', linewidth=0.8)
+                        
+                        # Add significance text
+                        ax.text(group_idx, y + 0.01, sig_text, 
+                               ha='center', va='bottom', fontsize=10, fontweight='bold')
+                    except Exception as e:
+                        pass  # Skip if test fails
             
             # Formatting
             ax.set_xlabel('Cross-Platform Concordance Group', fontsize=11)
@@ -6460,9 +6499,10 @@ class ComparativeAnalyzer:
             ax.set_xticks(x)
             ax.set_xticklabels(concordance_groups)
             ax.legend(loc='upper left')
-            ax2.legend(loc='upper right')
             ax.grid(True, alpha=0.3, axis='y')
-            ax.set_ylim(0, 1)
+            
+            # Adjust y-axis limit to accommodate significance bars
+            ax.set_ylim(0, max_y + 0.15)
             
             # Add interpretation text
             if any(g > 0 for g in group_counts):
