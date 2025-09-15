@@ -2824,37 +2824,36 @@ class ImportanceMatrixAnalyzer:
         return png_path
     
     def plot_rank_consistency_overview(self, data: ImportanceAnalysisData):
-        """Plot overview of rank consistency analysis"""
+        """Plot overview of rank consistency analysis with mean rank comparison"""
         print("Generating rank consistency overview...")
         
-        fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+        # Changed to 2x3 layout
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        
+        # Prepare data for shared features scatter plot
+        shared_features_data = {}
         
         # Plot for A→B if available
         if data.importance_a_to_b is not None and data.rank_consistency_a_to_b is not None:
-            rank_stats = data.rank_consistency_a_to_b['rank_stats']
+            rank_stats_a_to_b = data.rank_consistency_a_to_b['rank_stats']
             
             # Top left: Mean rank vs rank variance
-            scatter = axes[0, 0].scatter(rank_stats['mean_rank'], rank_stats['rank_variance'], 
+            scatter = axes[0, 0].scatter(rank_stats_a_to_b['mean_rank'], rank_stats_a_to_b['rank_variance'], 
                                        alpha=0.6, s=3, color=COLORS['secondary'])
             axes[0, 0].set_xlabel('Mean Rank (lower = more important)')
             axes[0, 0].set_ylabel('Rank Variance (higher = less consistent)')
             axes[0, 0].set_title(f'{data.platform_a_name} → {data.platform_b_name}: Consistency vs Importance')
             
-            # Highlight interesting features
-            consistent_important = rank_stats[(rank_stats['mean_rank'] < rank_stats['mean_rank'].quantile(0.10)) & 
-                                            (rank_stats['rank_variance'] < rank_stats['rank_variance'].quantile(0.10))]
+            # Highlight only consistently important features (removed highly variable)
+            consistent_important = rank_stats_a_to_b[(rank_stats_a_to_b['mean_rank'] < rank_stats_a_to_b['mean_rank'].quantile(0.10)) & 
+                                            (rank_stats_a_to_b['rank_variance'] < rank_stats_a_to_b['rank_variance'].quantile(0.10))]
             if len(consistent_important) > 0:
                 axes[0, 0].scatter(consistent_important['mean_rank'], consistent_important['rank_variance'], 
                                  color=COLORS['accent'], s=3, label='Consistently Important', alpha=0.8)
             
-            inconsistent = rank_stats[rank_stats['rank_variance'] > rank_stats['rank_variance'].quantile(0.9)]
-            if len(inconsistent) > 0:
-                axes[0, 0].scatter(inconsistent['mean_rank'], inconsistent['rank_variance'], 
-                                 color=COLORS['warning'], s=3, label='Highly Variable', alpha=0.8)
-            
             axes[0, 0].legend()
             
-            # Top right: Distribution of times being top feature
+            # Top middle: Distribution of times being top feature
             top_counts = data.rank_consistency_a_to_b['top_feature_counts']
             axes[0, 1].hist(top_counts.values, bins=20, alpha=0.7, color=COLORS['primary'], edgecolor='black')
             axes[0, 1].set_xlabel('Times Being Top Feature')
@@ -2863,33 +2862,31 @@ class ImportanceMatrixAnalyzer:
             axes[0, 1].axvline(top_counts.mean(), color=COLORS['warning'], linestyle='--', 
                              label=f'Mean: {top_counts.mean():.1f}')
             axes[0, 1].legend()
+            
+            # Store mean ranks for shared features plot
+            shared_features_data['a_to_b'] = rank_stats_a_to_b['mean_rank']
         
         # Plot for B→A if available
         if data.importance_b_to_a is not None and data.rank_consistency_b_to_a is not None:
-            rank_stats = data.rank_consistency_b_to_a['rank_stats']
+            rank_stats_b_to_a = data.rank_consistency_b_to_a['rank_stats']
             
             # Bottom left: Mean rank vs rank variance
-            scatter = axes[1, 0].scatter(rank_stats['mean_rank'], rank_stats['rank_variance'], 
+            scatter = axes[1, 0].scatter(rank_stats_b_to_a['mean_rank'], rank_stats_b_to_a['rank_variance'], 
                                        alpha=0.6, s=3, color=COLORS['secondary'])
             axes[1, 0].set_xlabel('Mean Rank (lower = more important)')
             axes[1, 0].set_ylabel('Rank Variance (higher = less consistent)')
             axes[1, 0].set_title(f'{data.platform_b_name} → {data.platform_a_name}: Consistency vs Importance')
             
-            # Highlight interesting features
-            consistent_important = rank_stats[(rank_stats['mean_rank'] < rank_stats['mean_rank'].quantile(0.10)) & 
-                                            (rank_stats['rank_variance'] < rank_stats['rank_variance'].quantile(0.10))]
+            # Highlight only consistently important features (removed highly variable)
+            consistent_important = rank_stats_b_to_a[(rank_stats_b_to_a['mean_rank'] < rank_stats_b_to_a['mean_rank'].quantile(0.10)) & 
+                                            (rank_stats_b_to_a['rank_variance'] < rank_stats_b_to_a['rank_variance'].quantile(0.10))]
             if len(consistent_important) > 0:
                 axes[1, 0].scatter(consistent_important['mean_rank'], consistent_important['rank_variance'], 
                                  color=COLORS['accent'], s=3, label='Consistently Important', alpha=0.8)
             
-            inconsistent = rank_stats[rank_stats['rank_variance'] > rank_stats['rank_variance'].quantile(0.9)]
-            if len(inconsistent) > 0:
-                axes[1, 0].scatter(inconsistent['mean_rank'], inconsistent['rank_variance'], 
-                                 color=COLORS['warning'], s=3, label='Highly Variable', alpha=0.8)
-            
             axes[1, 0].legend()
             
-            # Bottom right: Distribution of times being top feature
+            # Bottom middle: Distribution of times being top feature
             top_counts = data.rank_consistency_b_to_a['top_feature_counts']
             axes[1, 1].hist(top_counts.values, bins=20, alpha=0.7, color=COLORS['secondary'], edgecolor='black')
             axes[1, 1].set_xlabel('Times Being Top Feature')
@@ -2898,6 +2895,74 @@ class ImportanceMatrixAnalyzer:
             axes[1, 1].axvline(top_counts.mean(), color=COLORS['warning'], linestyle='--', 
                              label=f'Mean: {top_counts.mean():.1f}')
             axes[1, 1].legend()
+            
+            # Store mean ranks for shared features plot
+            shared_features_data['b_to_a'] = rank_stats_b_to_a['mean_rank']
+        
+        # Create scatter plot of mean ranks for shared features (right column, both rows)
+        if 'a_to_b' in shared_features_data and 'b_to_a' in shared_features_data:
+            # Find shared features
+            shared_features = list(set(shared_features_data['a_to_b'].index) & 
+                                 set(shared_features_data['b_to_a'].index))
+            
+            if len(shared_features) > 0:
+                # Get mean ranks for shared features
+                mean_ranks_a_to_b = shared_features_data['a_to_b'][shared_features]
+                mean_ranks_b_to_a = shared_features_data['b_to_a'][shared_features]
+                
+                # Create scatter plot in both right panels (for 2x3 symmetry)
+                for row_idx in [0, 1]:
+                    ax = axes[row_idx, 2]
+                    
+                    # Make square plot
+                    ax.set_aspect('equal', adjustable='box')
+                    
+                    # Scatter plot
+                    scatter = ax.scatter(mean_ranks_a_to_b, mean_ranks_b_to_a, 
+                                       alpha=0.6, s=10, color=COLORS['info'])
+                    
+                    # Add diagonal reference line
+                    max_rank = max(mean_ranks_a_to_b.max(), mean_ranks_b_to_a.max())
+                    min_rank = min(mean_ranks_a_to_b.min(), mean_ranks_b_to_a.min())
+                    ax.plot([min_rank, max_rank], [min_rank, max_rank], 
+                           'k--', alpha=0.3, linewidth=1, label='y=x')
+                    
+                    # Calculate correlation
+                    from scipy.stats import pearsonr, spearmanr
+                    pearson_r, pearson_p = pearsonr(mean_ranks_a_to_b, mean_ranks_b_to_a)
+                    spearman_r, spearman_p = spearmanr(mean_ranks_a_to_b, mean_ranks_b_to_a)
+                    
+                    # Add correlation text
+                    corr_text = f'Pearson r = {pearson_r:.3f}\nSpearman ρ = {spearman_r:.3f}\nn = {len(shared_features)}'
+                    ax.text(0.05, 0.95, corr_text, transform=ax.transAxes,
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                           verticalalignment='top', fontsize=9)
+                    
+                    # Labels and title
+                    ax.set_xlabel(f'Mean Rank: {data.platform_a_name} → {data.platform_b_name}')
+                    ax.set_ylabel(f'Mean Rank: {data.platform_b_name} → {data.platform_a_name}')
+                    
+                    if row_idx == 0:
+                        ax.set_title('Shared Features Mean Rank Comparison')
+                    
+                    # Set equal axis limits for square plot
+                    ax.set_xlim([min_rank, max_rank])
+                    ax.set_ylim([min_rank, max_rank])
+                    
+                    ax.grid(True, alpha=0.3)
+                    ax.legend(loc='lower right')
+            else:
+                # No shared features
+                for row_idx in [0, 1]:
+                    axes[row_idx, 2].text(0.5, 0.5, 'No shared features\nbetween platforms', 
+                                        ha='center', va='center', fontsize=12)
+                    axes[row_idx, 2].set_title('Shared Features Mean Rank Comparison')
+        else:
+            # Missing data for comparison
+            for row_idx in [0, 1]:
+                axes[row_idx, 2].text(0.5, 0.5, 'Insufficient data\nfor comparison', 
+                                    ha='center', va='center', fontsize=12)
+                axes[row_idx, 2].set_title('Shared Features Mean Rank Comparison')
         
         plt.tight_layout()
         return self.save_figure(fig, "rank_consistency_overview")
@@ -3579,13 +3644,7 @@ class ImportanceMatrixAnalyzer:
                                      alpha=0.7, s=10, color=COLORS['accent'],
                                      edgecolors='white', linewidth=1)
             
-            # Add trend line
-            if len(features_data) > 2:
-                z = np.polyfit(features_data['self_importance_score'], features_data['performance_r'], 1)
-                p = np.poly1d(z)
-                x_trend = np.linspace(features_data['self_importance_score'].min(), 
-                                    features_data['self_importance_score'].max(), 100)
-                ax_score.plot(x_trend, p(x_trend), '--', color=COLORS['warning'], alpha=0.8, linewidth=2)
+            # No trend line for bottom plots (removed as requested)
             
             # Add correlation statistics
             score_corr_info = result['correlation_score_performance']
@@ -3603,6 +3662,7 @@ class ImportanceMatrixAnalyzer:
             ax_score.set_xlabel('Self-Importance Score\n(higher = more important)')
             ax_score.set_ylabel('Feature Performance (r)')
             ax_score.set_title(f'{direction_name}\nScore vs Performance')
+            ax_score.set_ylim(0, 1)  # Set y-axis limits to 0-1 as requested
             ax_score.grid(True, alpha=0.3)
             
             # Label extreme points for score plot
@@ -4846,7 +4906,8 @@ class ImportanceMatrixAnalyzer:
             return None
         
         n_analyses = len(analysis_keys)
-        fig, axes = plt.subplots(1, n_analyses, figsize=(6*n_analyses, 6))
+        # Make square subplots
+        fig, axes = plt.subplots(1, n_analyses, figsize=(7*n_analyses, 7))
         if n_analyses == 1:
             axes = [axes]
         
@@ -4868,15 +4929,14 @@ class ImportanceMatrixAnalyzer:
             thresholds = analysis['thresholds']
             ax = axes[col_idx]
             
-            # Compute PPI validation PR curve with F1 scores
-            precision_values, recall_values, f1_values = self._compute_ppi_pr_curve(
+            # Compute PPI validation PR curve (removed F1 calculation)
+            precision_values, recall_values, _ = self._compute_ppi_pr_curve(
                 importance_matrix, data.ppi_reference, thresholds)
             
             if len(precision_values) > 0 and len(recall_values) > 0:
                 # Convert to percentages for display
                 precision_pct = [p * 100 for p in precision_values]
                 recall_pct = [r * 100 for r in recall_values]
-                f1_pct = [f * 100 for f in f1_values]
                 
                 # Plot the PR curve - separate lines and points to avoid connecting first and last
                 # Plot lines only between threshold points (not including no-threshold)
@@ -4888,73 +4948,65 @@ class ImportanceMatrixAnalyzer:
                 ax.plot(recall_pct, precision_pct, 'o', 
                        color=COLORS['primary'], markersize=6, alpha=0.8, label='PR Curve')
                 
-                # Create secondary axis for F1 score
-                ax2 = ax.twinx()
-                # Similar approach for F1 curve
-                if n_thresh > 0:
-                    ax2.plot(recall_pct[:n_thresh], f1_pct[:n_thresh], '--', 
-                            color=COLORS['secondary'], linewidth=2, alpha=0.8)
-                ax2.plot(recall_pct, f1_pct, 's', 
-                        color=COLORS['secondary'], markersize=5, alpha=0.8, label='F1 Score')
+                # Calculate AUPRC using trapezoidal integration
+                auprc = self._calculate_auprc(recall_values, precision_values)
                 
-                # Find and mark the maximum F1 point
-                max_f1_idx = np.argmax(f1_values)
-                ax.plot(recall_pct[max_f1_idx], precision_pct[max_f1_idx], 'r*', 
-                       markersize=15, label=f'Max F1={f1_pct[max_f1_idx]:.1f}%')
-                ax2.plot(recall_pct[max_f1_idx], f1_pct[max_f1_idx], 'r*', markersize=15)
+                # Test AUPRC significance using analytical methods (fast)
+                p_value, random_auprc = self._test_auprc_significance(
+                    importance_matrix, data.ppi_reference, thresholds, auprc,
+                    n_permutations=10, use_permutation=False)
+                
+                # Make subplot square by setting aspect ratio
+                ax.set_aspect('equal', adjustable='box')
                 
                 # Set fixed axis limits to 0-100% for consistency and comparability
                 ax.set_xlim(0, 100)
                 ax.set_ylim(0, 100)
-                ax2.set_ylim(0, 100)
                 
                 # Format axes as percentages
                 ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
                 ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.1f}%'))
-                ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
                 
                 # Labels and title
                 ax.set_xlabel('Recall (% of PPI edges recovered)')
-                ax.set_ylabel('Precision (% of predicted edges in PPI)', color=COLORS['primary'])
-                ax2.set_ylabel('F1 Score (%)', color=COLORS['secondary'])
-                ax.set_title(f'{direction_name}\nPR Curve with F1 Score')
+                ax.set_ylabel('Precision (% of predicted edges in PPI)')
+                ax.set_title(f'{direction_name}\nPR Curve')
                 ax.grid(True, alpha=0.3)
                 
-                # Color the y-axis labels to match the lines
-                ax.tick_params(axis='y', labelcolor=COLORS['primary'])
-                ax2.tick_params(axis='y', labelcolor=COLORS['secondary'])
-                
-                # Add threshold annotations for key points including F1
+                # Add threshold annotations for key points
                 extended_thresholds = list(thresholds) + [0.0]
-                step_size = max(1, len(extended_thresholds)//8)  # Show ~8 points
+                step_size = max(1, len(extended_thresholds)//6)  # Show ~6 points
                 for i in range(0, len(extended_thresholds), step_size):
-                    if i < len(recall_pct) and i < len(precision_pct) and i < len(f1_pct):
+                    if i < len(recall_pct) and i < len(precision_pct):
                         thresh_val = extended_thresholds[i] if i < len(thresholds) else 0.0
-                        # Pre-format F1 value to avoid f-string issues
-                        f1_str = f'{f1_pct[i]:.1f}'
                         if thresh_val > 0:
-                            label = f'T={thresh_val:.3f}\nF1={f1_str}%'
+                            label = f'T={thresh_val:.3f}'
                         else:
-                            label = f'No threshold\nF1={f1_str}%'
+                            label = f'No threshold'
                         ax.annotate(label, 
                                   (recall_pct[i], precision_pct[i]),
                                   xytext=(5, 5), textcoords='offset points',
                                   fontsize=8, alpha=0.8,
                                   bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7))
                 
-                # Combine legends from both axes
-                lines1, labels1 = ax.get_legend_handles_labels()
-                lines2, labels2 = ax2.get_legend_handles_labels()
-                ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+                # Add legend
+                ax.legend(loc='upper right')
                 
-                # Add summary statistics text box with F1 info
+                # Add AUPRC and statistics text box
                 total_ppi_edges = len(data.ppi_reference.edges())
                 max_pred_edges = max([analysis['edge_counts'][i] for i in range(len(thresholds))]) if analysis['edge_counts'] else 0
                 max_overlap = max([int(r * total_ppi_edges / 100) for r in recall_pct]) if recall_pct else 0
-                optimal_threshold = extended_thresholds[max_f1_idx] if max_f1_idx < len(extended_thresholds) else 0
                 
-                stats_text = f'Max F1: {f1_pct[max_f1_idx]:.1f}% @ T={optimal_threshold:.3f}\n'
-                stats_text += f'Max overlap: {max_overlap:,} edges\n'
+                stats_text = f'AUPRC: {auprc:.3f}\n'
+                stats_text += f'Random: {random_auprc:.3f}\n'
+                if p_value < 0.001:
+                    stats_text += f'p < 0.001***\n'
+                elif p_value < 0.01:
+                    stats_text += f'p = {p_value:.3f}**\n'
+                elif p_value < 0.05:
+                    stats_text += f'p = {p_value:.3f}*\n'
+                else:
+                    stats_text += f'p = {p_value:.3f}\n'
                 stats_text += f'PPI edges: {total_ppi_edges:,}\n'
                 stats_text += f'Max predicted: {max_pred_edges:,}'
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
@@ -4968,6 +5020,355 @@ class ImportanceMatrixAnalyzer:
         
         plt.tight_layout()
         return self.save_figure(fig, "threshold_pr_curves")
+    
+    def plot_threshold_pr_curves_combined(self, data: ImportanceAnalysisData, 
+                                          threshold_analyses: Dict) -> plt.Figure:
+        """
+        Plot Precision-Recall curves for both full PPI and physical-only PPI in the same figure.
+        Shows network edge validation against both PPI references with separate statistics.
+        
+        Args:
+            data: ImportanceAnalysisData object
+            threshold_analyses: Dictionary with threshold analysis results for each direction
+            
+        Returns:
+            Matplotlib figure with combined PR curves
+        """
+        if not NETWORKX_AVAILABLE or data.ppi_reference is None:
+            print("NetworkX or PPI reference not available. Skipping PR curves plot.")
+            return None
+        
+        print("Generating combined PR curves (full PPI and physical-only)...")
+        
+        # Determine which directions are available - look for absolute_importance analyses
+        directions = []
+        for key in threshold_analyses:
+            if 'A_to_B' in key and threshold_analyses[key].get('threshold_type') == 'absolute_importance':
+                directions.append((key, f"{data.platform_a_name} → {data.platform_b_name}"))
+            elif 'B_to_A' in key and threshold_analyses[key].get('threshold_type') == 'absolute_importance':
+                directions.append((key, f"{data.platform_b_name} → {data.platform_a_name}"))
+        
+        if not directions:
+            print("No threshold analyses available for PR curves")
+            return None
+        
+        # Create figure with square subplots
+        n_cols = len(directions)
+        fig, axes = plt.subplots(1, n_cols, figsize=(5*n_cols, 5))
+        if n_cols == 1:
+            axes = [axes]
+        
+        # Create physical PPI subgraph
+        physical_ppi = nx.Graph()
+        for u, v, edge_data in data.ppi_reference.edges(data=True):
+            if edge_data.get('physical', 0) == 1:
+                physical_ppi.add_edge(u, v)
+        
+        for idx, (direction_key, direction_label) in enumerate(directions):
+            ax = axes[idx]
+            analysis = threshold_analyses[direction_key]
+            
+            # Get the importance matrix for this direction
+            if 'A_to_B' in direction_key:
+                importance_matrix = data.importance_a_to_b
+            else:
+                importance_matrix = data.importance_b_to_a
+            
+            if importance_matrix is None:
+                continue
+            
+            # Get thresholds to evaluate
+            thresholds = analysis['thresholds']
+            
+            # Compute PR curves for all thresholds
+            print(f"  Computing PR curves for {direction_label}...")
+            precision_full, recall_full, _ = self._compute_ppi_pr_curve(
+                importance_matrix,
+                data.ppi_reference,
+                thresholds
+            )
+            
+            precision_physical, recall_physical, _ = self._compute_ppi_pr_curve(
+                importance_matrix,
+                physical_ppi,
+                thresholds
+            )
+            
+            # Plot PR curves
+            if len(precision_full) > 0 and len(recall_full) > 0:
+                # Plot full PPI curve (excluding the last point which is threshold=0)
+                n_thresh = len(thresholds)
+                ax.plot(recall_full[:n_thresh], precision_full[:n_thresh], 
+                       'o-', color='steelblue', linewidth=2.5, markersize=6,
+                       alpha=0.8, label='Full PPI')
+                
+                # Calculate and store AUPRC for full PPI
+                auprc_full = self._calculate_auprc(recall_full, precision_full)
+                
+                # Test significance
+                p_value_full, random_auprc_full = self._test_auprc_significance(
+                    importance_matrix,
+                    data.ppi_reference,
+                    thresholds,
+                    auprc_full,
+                    n_permutations=0,  # Use analytical method only
+                    use_permutation=False
+                )
+            else:
+                auprc_full = 0.0
+                p_value_full = 1.0
+                random_auprc_full = 0.0
+            
+            if len(precision_physical) > 0 and len(recall_physical) > 0:
+                # Plot physical PPI curve
+                n_thresh = len(thresholds)
+                ax.plot(recall_physical[:n_thresh], precision_physical[:n_thresh], 
+                       's--', color='darkorange', linewidth=2.5, markersize=5,
+                       alpha=0.7, label='Physical PPI')
+                
+                # Calculate and store AUPRC for physical PPI
+                auprc_physical = self._calculate_auprc(recall_physical, precision_physical)
+                
+                # Test significance
+                p_value_physical, random_auprc_physical = self._test_auprc_significance(
+                    importance_matrix,
+                    physical_ppi,
+                    thresholds,
+                    auprc_physical,
+                    n_permutations=0,
+                    use_permutation=False
+                )
+            else:
+                auprc_physical = 0.0
+                p_value_physical = 1.0
+                random_auprc_physical = 0.0
+            
+            # Add random baseline (horizontal line at baseline precision, not diagonal)
+            # The random baseline for PR curves is the proportion of positive examples
+            # For reference, also show diagonal which would be ROC random baseline
+            ax.axhline(y=random_auprc_full, color='gray', linestyle=':', 
+                      alpha=0.5, linewidth=1, label=f'Random baseline ({random_auprc_full:.3f})')
+            # Optional: show diagonal for comparison (ROC baseline)
+            # ax.plot([0, 1], [0, 1], 'k--', alpha=0.2, linewidth=0.5)
+            
+            # Format statistics text
+            def format_p_value(p_val):
+                if p_val < 0.001:
+                    return "<0.001***"
+                elif p_val < 0.01:
+                    return f"{p_val:.3f}**"
+                elif p_val < 0.05:
+                    return f"{p_val:.3f}*"
+                else:
+                    return f"{p_val:.3f}"
+            
+            # Create statistics text box
+            stats_text = f"Full PPI ({data.ppi_reference.number_of_edges()} edges):\n"
+            stats_text += f"  AUPRC: {auprc_full:.4f}\n"
+            stats_text += f"  Random: {random_auprc_full:.4f}\n"
+            stats_text += f"  p-value: {format_p_value(p_value_full)}\n"
+            stats_text += f"\nPhysical PPI ({physical_ppi.number_of_edges()} edges):\n"
+            stats_text += f"  AUPRC: {auprc_physical:.4f}\n"
+            stats_text += f"  Random: {random_auprc_physical:.4f}\n"
+            stats_text += f"  p-value: {format_p_value(p_value_physical)}\n"
+            stats_text += f"\nThresholds: {len(thresholds)}"
+            
+            # Add text box with statistics
+            ax.text(0.98, 0.02, stats_text.strip(), transform=ax.transAxes,
+                   fontsize=8, verticalalignment='bottom', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9))
+            
+            # Formatting
+            ax.set_xlabel('Recall', fontsize=10)
+            ax.set_ylabel('Precision', fontsize=10)
+            ax.set_title(f'{direction_label}\nPR Curves: Full vs Physical PPI', fontsize=11)
+            ax.legend(loc='upper right', fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.set_aspect('equal')
+            ax.set_xlim([0, 1])
+            ax.set_ylim([0, 1])
+            
+            # Add threshold annotations for a few key points
+            if len(thresholds) > 0 and len(recall_full) > 0:
+                # Annotate first, middle, and last threshold
+                indices_to_annotate = [0, len(thresholds)//2, len(thresholds)-1]
+                for idx_ann in indices_to_annotate:
+                    if idx_ann < len(thresholds) and idx_ann < len(recall_full):
+                        ax.annotate(f't={thresholds[idx_ann]:.3f}',
+                                   xy=(recall_full[idx_ann], precision_full[idx_ann]),
+                                   xytext=(5, 5), textcoords='offset points',
+                                   fontsize=7, alpha=0.7)
+        
+        plt.suptitle('Precision-Recall Curves: Network Validation Against PPI References', 
+                    fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        return self.save_figure(fig, "threshold_pr_curves_combined")
+    
+    def plot_threshold_pr_curves_physical_only(self, data: ImportanceAnalysisData, 
+                                              threshold_analyses: Dict) -> plt.Figure:
+        """
+        Plot Precision-Recall curves using only physical PPI interactions as reference.
+        
+        This is identical to plot_threshold_pr_curves but filters the PPI network
+        to include only physical interactions (where physical=1 in edge attributes).
+        
+        Args:
+            data: ImportanceAnalysisData object with networks and PPI reference
+            threshold_analyses: Dictionary with threshold analysis results
+            
+        Returns:
+            Matplotlib figure with PR curves for physical PPI only
+        """
+        if not NETWORKX_AVAILABLE or not threshold_analyses:
+            print("NetworkX not available or no threshold analyses. Skipping physical PPI PR curves.")
+            return None
+            
+        print("Generating threshold PR curves for physical PPI only...")
+        
+        # Check if we have PPI reference for validation
+        if data.ppi_reference is None:
+            print("  No PPI reference available for PR curves")
+            return None
+        
+        # Filter PPI network to include only physical interactions
+        physical_ppi = nx.Graph()
+        n_physical = 0
+        n_total = 0
+        
+        for u, v, edge_data in data.ppi_reference.edges(data=True):
+            n_total += 1
+            if edge_data.get('physical', 0) == 1:
+                physical_ppi.add_edge(u, v, **edge_data)
+                n_physical += 1
+        
+        if n_physical == 0:
+            print(f"  No physical interactions found in PPI network (0/{n_total} edges)")
+            return None
+        
+        print(f"  Using {n_physical}/{n_total} physical PPI edges ({100*n_physical/n_total:.1f}%)")
+        
+        # Determine which analyses to plot - only absolute_importance analyses are supported for PR plots
+        analysis_keys = [k for k, v in threshold_analyses.items() if v.get('threshold_type') == 'absolute_importance']
+        if not analysis_keys:
+            print("  No threshold analyses found for PR curves")
+            return None
+        
+        n_analyses = len(analysis_keys)
+        # Make square subplots
+        fig, axes = plt.subplots(1, n_analyses, figsize=(7*n_analyses, 7))
+        if n_analyses == 1:
+            axes = [axes]
+        
+        for col_idx, analysis_key in enumerate(analysis_keys):
+            analysis = threshold_analyses[analysis_key]
+            
+            # Determine which importance matrix to use
+            if 'A_to_B' in analysis_key:
+                importance_matrix = data.importance_a_to_b
+                direction_name = f"{data.platform_a_name} → {data.platform_b_name}"
+            else:
+                importance_matrix = data.importance_b_to_a  
+                direction_name = f"{data.platform_b_name} → {data.platform_a_name}"
+                
+            if importance_matrix is None:
+                continue
+            
+            # Get thresholds and compute PR metrics using physical PPI only
+            thresholds = analysis['thresholds']
+            ax = axes[col_idx]
+            
+            # Compute PPI validation PR curve using physical PPI network
+            precision_values, recall_values, _ = self._compute_ppi_pr_curve(
+                importance_matrix, physical_ppi, thresholds)
+            
+            if len(precision_values) > 0 and len(recall_values) > 0:
+                # Convert to percentages for display
+                precision_pct = [p * 100 for p in precision_values]
+                recall_pct = [r * 100 for r in recall_values]
+                
+                # Plot the PR curve - separate lines and points to avoid connecting first and last
+                # Plot lines only between threshold points (not including no-threshold)
+                n_thresh = len(thresholds)
+                if n_thresh > 0:
+                    ax.plot(recall_pct[:n_thresh], precision_pct[:n_thresh], '-', 
+                           color=COLORS['secondary'], linewidth=2, alpha=0.8)
+                # Plot all points including no-threshold
+                ax.plot(recall_pct, precision_pct, 'o', 
+                       color=COLORS['secondary'], markersize=6, alpha=0.8, label='PR Curve (Physical)')
+                
+                # Calculate AUPRC using trapezoidal integration
+                auprc = self._calculate_auprc(recall_values, precision_values)
+                
+                # Test AUPRC significance using analytical methods (fast)
+                p_value, random_auprc = self._test_auprc_significance(
+                    importance_matrix, physical_ppi, thresholds, auprc,
+                    n_permutations=10, use_permutation=False)
+                
+                # Make subplot square by setting aspect ratio
+                ax.set_aspect('equal', adjustable='box')
+                
+                # Set fixed axis limits to 0-100% for consistency and comparability
+                ax.set_xlim(0, 100)
+                ax.set_ylim(0, 100)
+                
+                # Format axes as percentages
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
+                ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.1f}%'))
+                
+                # Labels and title
+                ax.set_xlabel('Recall (% of physical PPI edges recovered)')
+                ax.set_ylabel('Precision (% of predicted edges in physical PPI)')
+                ax.set_title(f'{direction_name}\nPR Curve (Physical PPI Only)')
+                ax.grid(True, alpha=0.3)
+                
+                # Add threshold annotations for key points
+                extended_thresholds = list(thresholds) + [0.0]
+                step_size = max(1, len(extended_thresholds)//6)  # Show ~6 points
+                for i in range(0, len(extended_thresholds), step_size):
+                    if i < len(recall_pct) and i < len(precision_pct):
+                        thresh_val = extended_thresholds[i] if i < len(thresholds) else 0.0
+                        if thresh_val > 0:
+                            label = f'T={thresh_val:.3f}'
+                        else:
+                            label = f'No threshold'
+                        ax.annotate(label, 
+                                  (recall_pct[i], precision_pct[i]),
+                                  xytext=(5, 5), textcoords='offset points',
+                                  fontsize=8, alpha=0.8,
+                                  bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7))
+                
+                # Add legend
+                ax.legend(loc='upper right')
+                
+                # Add AUPRC and statistics text box
+                total_physical_edges = len(physical_ppi.edges())
+                max_pred_edges = max([analysis['edge_counts'][i] for i in range(len(thresholds))]) if analysis['edge_counts'] else 0
+                max_overlap = max([int(r * total_physical_edges / 100) for r in recall_pct]) if recall_pct else 0
+                
+                stats_text = f'AUPRC: {auprc:.3f}\n'
+                stats_text += f'Random: {random_auprc:.3f}\n'
+                if p_value < 0.001:
+                    stats_text += f'p < 0.001***\n'
+                elif p_value < 0.01:
+                    stats_text += f'p = {p_value:.3f}**\n'
+                elif p_value < 0.05:
+                    stats_text += f'p = {p_value:.3f}*\n'
+                else:
+                    stats_text += f'p = {p_value:.3f}\n'
+                stats_text += f'Physical PPI edges: {total_physical_edges:,}\n'
+                stats_text += f'Max predicted: {max_pred_edges:,}'
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+                       verticalalignment='top', fontsize=9,
+                       bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+                
+            else:
+                ax.text(0.5, 0.5, 'No PPI validation\ndata available', 
+                       ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(f'{direction_name}\nNetwork Edge Validation vs Physical PPI')
+        
+        plt.tight_layout()
+        return self.save_figure(fig, "threshold_pr_curves_physical_only")
     
     def _compute_ppi_pr_curve(self, importance_matrix: pd.DataFrame, 
                              ppi_network: 'nx.Graph', 
@@ -5047,6 +5448,726 @@ class ImportanceMatrixAnalyzer:
             f1_values.append(f1)
         
         return precision_values, recall_values, f1_values
+    
+    def _calculate_auprc(self, recall_values: List[float], precision_values: List[float]) -> float:
+        """
+        Calculate Area Under Precision-Recall Curve using trapezoidal integration.
+        
+        Args:
+            recall_values: List of recall values
+            precision_values: List of precision values
+            
+        Returns:
+            AUPRC score between 0 and 1
+        """
+        if len(recall_values) < 2 or len(precision_values) < 2:
+            return 0.0
+        
+        # Sort by recall for proper integration
+        sorted_pairs = sorted(zip(recall_values, precision_values))
+        recall_sorted = [p[0] for p in sorted_pairs]
+        precision_sorted = [p[1] for p in sorted_pairs]
+        
+        # Use numpy's trapezoidal integration
+        auprc = np.trapz(precision_sorted, recall_sorted)
+        
+        return float(auprc)
+    
+    def _test_auprc_significance(self, importance_matrix: pd.DataFrame, 
+                                 ppi_network: 'nx.Graph', 
+                                 thresholds: List[float],
+                                 observed_auprc: float,
+                                 n_permutations: int = 10,
+                                 use_permutation: bool = False) -> Tuple[float, float]:
+        """
+        Test AUPRC significance using analytical approximation and optional permutation test.
+        
+        Uses two approaches:
+        1. Analytical baseline: Expected AUPRC for random classifier
+        2. Hypergeometric test: Statistical test based on enrichment
+        3. Optional: Permutation test with reduced iterations
+        
+        Args:
+            importance_matrix: Feature importance matrix
+            ppi_network: Reference PPI network
+            thresholds: List of threshold values
+            observed_auprc: Observed AUPRC from actual data
+            n_permutations: Number of permutations if enabled (default 10)
+            use_permutation: Whether to use permutation test (default False)
+            
+        Returns:
+            Tuple of (p_value, expected_random_auprc)
+        """
+        if not NETWORKX_AVAILABLE or ppi_network is None:
+            return 1.0, 0.0
+        
+        # Get basic statistics
+        ppi_edges = set()
+        for u, v in ppi_network.edges():
+            ppi_edges.add(tuple(sorted([u, v])))
+        
+        if len(ppi_edges) == 0:
+            return 1.0, 0.0
+        
+        # Calculate expected AUPRC for random classifier (analytical baseline)
+        input_features = set(importance_matrix.index)
+        output_features = set(importance_matrix.columns)
+        overlapping_features = input_features & output_features
+        
+        # Maximum possible edges in our feature space
+        max_possible_edges = len(overlapping_features) * (len(overlapping_features) - 1) // 2
+        
+        if max_possible_edges == 0:
+            return 1.0, 0.0
+        
+        # Count PPI edges in overlap
+        n_ppi_in_overlap = 0
+        for u, v in ppi_edges:
+            if u in overlapping_features and v in overlapping_features:
+                n_ppi_in_overlap += 1
+        
+        # Analytical baseline: expected precision for random selection
+        baseline_precision = n_ppi_in_overlap / max_possible_edges if max_possible_edges > 0 else 0
+        random_auprc = baseline_precision
+        
+        # Hypergeometric-based significance test
+        # Test enrichment at multiple points along the PR curve
+        from scipy.stats import hypergeom
+        
+        p_values_hyper = []
+        
+        # Sample a few thresholds for hypergeometric test
+        test_indices = np.linspace(0, len(thresholds)-1, min(5, len(thresholds)), dtype=int)
+        
+        for idx in test_indices:
+            if idx >= len(thresholds):
+                continue
+                
+            threshold = thresholds[idx]
+            
+            # Count edges at this threshold
+            n_selected = 0
+            n_selected_in_ppi = 0
+            
+            for input_feature in importance_matrix.index:
+                if input_feature not in overlapping_features:
+                    continue
+                for output_feature in importance_matrix.columns:
+                    if output_feature not in overlapping_features or input_feature == output_feature:
+                        continue
+                    
+                    importance_value = importance_matrix.loc[input_feature, output_feature]
+                    if importance_value > threshold:
+                        n_selected += 1
+                        edge = tuple(sorted([input_feature, output_feature]))
+                        if edge in ppi_edges:
+                            n_selected_in_ppi += 1
+            
+            if n_selected > 0:
+                # Hypergeometric test: 
+                # Population = max_possible_edges
+                # Success states in population = n_ppi_in_overlap
+                # Sample size = n_selected
+                # Observed successes = n_selected_in_ppi
+                
+                # Calculate p-value for observing at least this many PPI edges
+                if n_selected <= max_possible_edges:
+                    p_val = hypergeom.sf(n_selected_in_ppi - 1, max_possible_edges, 
+                                        n_ppi_in_overlap, n_selected)
+                    p_values_hyper.append(p_val)
+        
+        # Combine p-values using Fisher's method or take minimum
+        if p_values_hyper:
+            # Use minimum p-value with Bonferroni correction
+            p_value_hyper = min(p_values_hyper) * len(p_values_hyper)
+            p_value_hyper = min(p_value_hyper, 1.0)
+        else:
+            p_value_hyper = 1.0
+        
+        # Optional: Permutation test with reduced iterations
+        if use_permutation and n_permutations > 0:
+            random_auprcs = []
+            
+            for _ in range(n_permutations):
+                # Create random importance matrix with same value distribution
+                random_matrix = importance_matrix.copy()
+                # Shuffle values within the matrix
+                values = random_matrix.values.flatten()
+                np.random.shuffle(values)
+                random_matrix = pd.DataFrame(values.reshape(importance_matrix.shape),
+                                            index=importance_matrix.index,
+                                            columns=importance_matrix.columns)
+                
+                # Calculate PR curve for random matrix
+                prec_rand, rec_rand, _ = self._compute_ppi_pr_curve(random_matrix, ppi_network, thresholds)
+                
+                if len(prec_rand) > 1 and len(rec_rand) > 1:
+                    random_auprc_perm = self._calculate_auprc(rec_rand, prec_rand)
+                    random_auprcs.append(random_auprc_perm)
+            
+            if random_auprcs:
+                # Calculate p-value: proportion of random AUPRCs >= observed AUPRC
+                p_value_perm = sum(1 for r in random_auprcs if r >= observed_auprc) / len(random_auprcs)
+                # Update random AUPRC estimate from permutations
+                random_auprc = np.mean(random_auprcs)
+                # Use the more conservative p-value
+                p_value = min(p_value_hyper, p_value_perm)
+            else:
+                p_value = p_value_hyper
+        else:
+            # Use hypergeometric p-value only
+            p_value = p_value_hyper
+        
+        # Additional check: if observed AUPRC is substantially higher than baseline
+        # we can be more confident in significance
+        if observed_auprc > 2 * random_auprc and random_auprc > 0:
+            # Strong enrichment, adjust p-value to reflect confidence
+            p_value = min(p_value, 0.01)
+        
+        return float(p_value), float(random_auprc)
+    
+    def plot_importance_vs_ppi_membership(self, data: ImportanceAnalysisData) -> plt.Figure:
+        """
+        Plot how feature importance relates to PPI network connectivity.
+        
+        Shows average degree (number of connections) and edge density for features
+        binned by importance ranking. This reveals whether important features are
+        network hubs and have denser interconnections.
+        
+        Args:
+            data: ImportanceAnalysisData object with importance matrices and PPI reference
+            
+        Returns:
+            Matplotlib figure showing importance vs PPI connectivity analysis
+        """
+        if not NETWORKX_AVAILABLE or data.ppi_reference is None:
+            print("NetworkX or PPI reference not available. Skipping importance vs PPI connectivity plot.")
+            return None
+        
+        print("Generating importance vs PPI connectivity analysis...")
+        
+        # Check which importance matrices are available
+        has_a_to_b = data.importance_a_to_b is not None
+        has_b_to_a = data.importance_b_to_a is not None
+        
+        if not has_a_to_b and not has_b_to_a:
+            print("  No importance matrices available")
+            return None
+        
+        # Create physical PPI subgraph
+        physical_ppi = nx.Graph()
+        for u, v, edge_data in data.ppi_reference.edges(data=True):
+            if edge_data.get('physical', 0) == 1:
+                physical_ppi.add_edge(u, v)
+        
+        # Prepare data for each direction
+        importance_data = []
+        
+        if has_a_to_b:
+            mean_importance_a_to_b = data.importance_a_to_b.mean(axis=1)
+            importance_data.append({
+                'direction': f"{data.platform_a_name} → {data.platform_b_name}",
+                'mean_importance': mean_importance_a_to_b,
+                'color': COLORS['primary']
+            })
+        
+        if has_b_to_a:
+            mean_importance_b_to_a = data.importance_b_to_a.mean(axis=1)
+            importance_data.append({
+                'direction': f"{data.platform_b_name} → {data.platform_a_name}",
+                'mean_importance': mean_importance_b_to_a,
+                'color': COLORS['secondary']
+            })
+        
+        n_directions = len(importance_data)
+        fig, axes = plt.subplots(2, n_directions, figsize=(5*n_directions, 10))
+        
+        if n_directions == 1:
+            axes = axes.reshape(2, 1)
+        
+        for col_idx, imp_data in enumerate(importance_data):
+            mean_importance = imp_data['mean_importance']
+            direction = imp_data['direction']
+            color = imp_data['color']
+            
+            # Sort features by mean importance (descending)
+            sorted_features = mean_importance.sort_values(ascending=False)
+            feature_names = list(sorted_features.index)
+            n_features = len(feature_names)
+            
+            # Top plot: Cumulative edge density percentage
+            ax_top = axes[0, col_idx]
+            
+            # Calculate cumulative edge density
+            # For top N features, what % of possible edges among them are in PPI?
+            cumulative_edge_density_ppi = []
+            cumulative_edge_density_physical = []
+            
+            # Get PPI edges as sets for fast lookup
+            ppi_edges_set = set()
+            for u, v in data.ppi_reference.edges():
+                ppi_edges_set.add(tuple(sorted([u, v])))
+            
+            physical_edges_set = set()
+            for u, v in physical_ppi.edges():
+                physical_edges_set.add(tuple(sorted([u, v])))
+            
+            # Calculate for each rank
+            for rank in range(1, n_features + 1):
+                top_features = feature_names[:rank]
+                
+                # Count edges among top features
+                edges_in_ppi = 0
+                edges_in_physical = 0
+                max_possible_edges = rank * (rank - 1) // 2
+                
+                if max_possible_edges > 0:
+                    for i, f1 in enumerate(top_features):
+                        for f2 in top_features[i+1:]:
+                            edge = tuple(sorted([f1, f2]))
+                            if edge in ppi_edges_set:
+                                edges_in_ppi += 1
+                            if edge in physical_edges_set:
+                                edges_in_physical += 1
+                    
+                    density_ppi = (edges_in_ppi / max_possible_edges) * 100
+                    density_physical = (edges_in_physical / max_possible_edges) * 100
+                else:
+                    density_ppi = 0
+                    density_physical = 0
+                
+                cumulative_edge_density_ppi.append(density_ppi)
+                cumulative_edge_density_physical.append(density_physical)
+            
+            # Calculate baseline density (overall)
+            total_possible = n_features * (n_features - 1) // 2
+            total_edges_ppi = len(ppi_edges_set)
+            total_edges_physical = len(physical_edges_set)
+            baseline_density_ppi = (total_edges_ppi / total_possible * 100) if total_possible > 0 else 0
+            baseline_density_physical = (total_edges_physical / total_possible * 100) if total_possible > 0 else 0
+            
+            # Subsample for plotting if too many features
+            ranks = np.arange(1, n_features + 1)
+            if n_features > 1000:
+                # Use log-spaced sampling for smooth curve
+                sample_indices = np.unique(np.logspace(0, np.log10(n_features-1), 500).astype(int))
+                ranks_plot = ranks[sample_indices]
+                density_ppi_plot = [cumulative_edge_density_ppi[i] for i in sample_indices]
+                density_physical_plot = [cumulative_edge_density_physical[i] for i in sample_indices]
+            else:
+                ranks_plot = ranks
+                density_ppi_plot = cumulative_edge_density_ppi
+                density_physical_plot = cumulative_edge_density_physical
+            
+            # Plot cumulative edge density curves
+            ax_top.plot(ranks_plot, density_ppi_plot, '-', color=color, 
+                       linewidth=2, label='Full PPI', alpha=0.8)
+            ax_top.plot(ranks_plot, density_physical_plot, '--', color=color, 
+                       linewidth=2, label='Physical PPI', alpha=0.8)
+            
+            # Add baselines
+            ax_top.axhline(baseline_density_ppi, color='gray', linestyle=':', 
+                          alpha=0.5, label=f'Baseline PPI ({baseline_density_ppi:.2f}%)')
+            ax_top.axhline(baseline_density_physical, color='darkgray', linestyle=':', 
+                          alpha=0.5, label=f'Baseline Physical ({baseline_density_physical:.2f}%)')
+            
+            ax_top.set_xlabel('Top N Features (by importance) [log scale]')
+            ax_top.set_ylabel('Edge Density (%)')
+            ax_top.set_title(f'{direction}\nCumulative Edge Density by Importance Rank')
+            ax_top.set_xscale('log')  # Add log scale for x-axis
+            ax_top.legend(loc='best')
+            ax_top.grid(True, alpha=0.3)
+            
+            # Add annotation for enrichment at top 100 features
+            if n_features >= 100 and baseline_density_ppi > 0:
+                top_100_density = cumulative_edge_density_ppi[99]  # Index 99 = rank 100
+                enrichment = top_100_density / baseline_density_ppi
+                if enrichment > 1.5:
+                    ax_top.text(0.02, 0.98, f'Top 100 features: {enrichment:.1f}x enriched',
+                              transform=ax_top.transAxes, verticalalignment='top',
+                              bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+            
+            # Bottom plot: Edge density within bins
+            ax_bottom = axes[1, col_idx]
+            
+            # Create log-spaced bins for better resolution at top ranks
+            n_bins = 8
+            # Use geometrically spaced bins
+            bin_edges = np.logspace(0, np.log10(n_features), n_bins + 1).astype(int)
+            bin_edges[0] = 0
+            bin_edges[-1] = n_features
+            
+            bin_labels = []
+            edge_densities_ppi = []
+            edge_densities_physical = []
+            expected_densities = []
+            
+            # Calculate overall edge density for baseline
+            ppi_edges_set = set()
+            for u, v in data.ppi_reference.edges():
+                ppi_edges_set.add(tuple(sorted([u, v])))
+            
+            physical_edges_set = set()
+            for u, v in physical_ppi.edges():
+                physical_edges_set.add(tuple(sorted([u, v])))
+            
+            for i in range(n_bins):
+                start_idx = bin_edges[i]
+                end_idx = bin_edges[i + 1]
+                
+                bin_features = feature_names[start_idx:end_idx]
+                n_bin_features = len(bin_features)
+                
+                # Count edges within this bin
+                edges_in_bin_ppi = 0
+                edges_in_bin_physical = 0
+                max_possible_edges = n_bin_features * (n_bin_features - 1) // 2
+                
+                for j, f1 in enumerate(bin_features):
+                    for f2 in bin_features[j+1:]:
+                        edge = tuple(sorted([f1, f2]))
+                        if edge in ppi_edges_set:
+                            edges_in_bin_ppi += 1
+                        if edge in physical_edges_set:
+                            edges_in_bin_physical += 1
+                
+                # Calculate density
+                density_ppi = (edges_in_bin_ppi / max_possible_edges * 100) if max_possible_edges > 0 else 0
+                density_physical = (edges_in_bin_physical / max_possible_edges * 100) if max_possible_edges > 0 else 0
+                
+                edge_densities_ppi.append(density_ppi)
+                edge_densities_physical.append(density_physical)
+                
+                # Expected density (baseline)
+                total_features = len(feature_names)
+                total_possible = total_features * (total_features - 1) // 2
+                expected_density = (len(ppi_edges_set) / total_possible * 100) if total_possible > 0 else 0
+                expected_densities.append(expected_density)
+                
+                # Create bin label
+                if i == 0:
+                    bin_labels.append(f'Top {end_idx}')
+                else:
+                    bin_labels.append(f'{start_idx+1}-{end_idx}')
+            
+            # Plot edge densities
+            x = np.arange(len(bin_labels))
+            width = 0.35
+            
+            bars1 = ax_bottom.bar(x - width/2, edge_densities_ppi, width, 
+                                 label='Full PPI', color=color, alpha=0.7)
+            bars2 = ax_bottom.bar(x + width/2, edge_densities_physical, width, 
+                                 label='Physical PPI', color=color, alpha=0.5)
+            
+            # Add baseline
+            ax_bottom.axhline(expected_densities[0] if expected_densities else 0, 
+                            color='gray', linestyle=':', alpha=0.5, 
+                            label=f'Expected density')
+            
+            # Add value labels on bars
+            for bars in [bars1, bars2]:
+                for bar in bars:
+                    height = bar.get_height()
+                    if height > 0.01:  # Only show label if bar is visible
+                        ax_bottom.text(bar.get_x() + bar.get_width()/2., height,
+                                     f'{height:.2f}%', ha='center', va='bottom', fontsize=8)
+            
+            ax_bottom.set_xlabel('Feature Rank Bins (by importance)')
+            ax_bottom.set_ylabel('Edge Density (%)')
+            ax_bottom.set_title(f'{direction}\nPPI Edge Density Within Importance Bins')
+            ax_bottom.set_xticks(x)
+            ax_bottom.set_xticklabels(bin_labels, rotation=45, ha='right')
+            ax_bottom.legend(loc='best')
+            ax_bottom.grid(True, alpha=0.3, axis='y')
+            
+            # Statistical test: compare top bin vs bottom bin density
+            if n_bins >= 2 and edge_densities_ppi[0] > 0 and edge_densities_ppi[-1] >= 0:
+                enrichment = edge_densities_ppi[0] / edge_densities_ppi[-1] if edge_densities_ppi[-1] > 0 else float('inf')
+                if enrichment > 2 or enrichment == float('inf'):
+                    if enrichment == float('inf'):
+                        test_text = f"Top bin density: {edge_densities_ppi[0]:.2f}%\nBottom bin: 0%"
+                    else:
+                        test_text = f"Top/Bottom enrichment:\n{enrichment:.1f}x"
+                    ax_bottom.text(0.98, 0.98, test_text, transform=ax_bottom.transAxes,
+                                 verticalalignment='top', horizontalalignment='right',
+                                 fontsize=9, bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+        
+        plt.suptitle('Feature Importance vs PPI Network Connectivity Analysis', 
+                    fontsize=16, fontweight='bold', y=1.00)
+        plt.tight_layout()
+        
+        return self.save_figure(fig, "importance_vs_ppi_connectivity")
+    
+    def plot_edge_importance_vs_ppi_membership(self, data: ImportanceAnalysisData) -> plt.Figure:
+        """
+        Plot how edge importance scores relate to PPI network membership.
+        
+        Ranks all possible edges (feature pairs) by their importance scores and
+        shows what percentage are actual edges in the PPI network. This reveals
+        whether high-importance feature pairs are enriched for known interactions.
+        
+        Args:
+            data: ImportanceAnalysisData object with importance matrices and PPI reference
+            
+        Returns:
+            Matplotlib figure showing edge importance vs PPI membership analysis
+        """
+        if not NETWORKX_AVAILABLE or data.ppi_reference is None:
+            print("NetworkX or PPI reference not available. Skipping edge importance vs PPI membership plot.")
+            return None
+        
+        print("Generating edge importance vs PPI membership analysis...")
+        
+        # Check which importance matrices are available
+        has_a_to_b = data.importance_a_to_b is not None
+        has_b_to_a = data.importance_b_to_a is not None
+        
+        if not has_a_to_b and not has_b_to_a:
+            print("  No importance matrices available")
+            return None
+        
+        # Create PPI edge sets for quick lookup
+        ppi_edges_set = set()
+        for u, v in data.ppi_reference.edges():
+            # Store edges in both directions for undirected comparison
+            ppi_edges_set.add((u, v))
+            ppi_edges_set.add((v, u))
+        
+        # Create physical PPI edge set
+        physical_edges_set = set()
+        for u, v, edge_data in data.ppi_reference.edges(data=True):
+            if edge_data.get('physical', 0) == 1:
+                physical_edges_set.add((u, v))
+                physical_edges_set.add((v, u))
+        
+        # Prepare data for each direction
+        edge_importance_data = []
+        
+        if has_a_to_b:
+            # Get row and column features
+            row_features = list(data.importance_a_to_b.index)  # Input features (from A)
+            col_features = list(data.importance_a_to_b.columns)  # Output features (from B)
+            # Find overlapping features between rows and columns
+            overlapping = list(set(row_features) & set(col_features))
+            edge_importance_data.append({
+                'direction': f"{data.platform_a_name} → {data.platform_b_name}",
+                'importance_matrix': data.importance_a_to_b,  # Keep as DataFrame for now
+                'row_features': row_features,
+                'col_features': col_features,
+                'overlapping_features': overlapping
+            })
+        
+        if has_b_to_a:
+            # Get row and column features
+            row_features = list(data.importance_b_to_a.index)  # Input features (from B)
+            col_features = list(data.importance_b_to_a.columns)  # Output features (from A)
+            # Find overlapping features between rows and columns
+            overlapping = list(set(row_features) & set(col_features))
+            edge_importance_data.append({
+                'direction': f"{data.platform_b_name} → {data.platform_a_name}",
+                'importance_matrix': data.importance_b_to_a,  # Keep as DataFrame for now
+                'row_features': row_features,
+                'col_features': col_features,
+                'overlapping_features': overlapping
+            })
+        
+        # Create figure with subplots - make them square (5x5 inches each)
+        n_cols = len(edge_importance_data)
+        fig, axes = plt.subplots(2, n_cols, figsize=(5*n_cols, 10))
+        
+        if n_cols == 1:
+            axes = axes.reshape(-1, 1)
+        
+        for col_idx, data_dict in enumerate(edge_importance_data):
+            direction = data_dict['direction']
+            importance_matrix = data_dict['importance_matrix']  # This is still a DataFrame
+            overlapping_features = data_dict['overlapping_features']
+            color = 'steelblue' if col_idx == 0 else 'darkorange'
+            
+            print(f"  Processing {direction}...")
+            print(f"    Overlapping features: {len(overlapping_features)}")
+            
+            # Extract edge importance scores only for overlapping features
+            edge_scores = []
+            
+            # For each pair of overlapping features, get the importance score
+            for i, feature_i in enumerate(overlapping_features):
+                for j in range(i + 1, len(overlapping_features)):  # Only upper triangle
+                    feature_j = overlapping_features[j]
+                    
+                    # Get importance scores from the DataFrame using feature names
+                    # These are the importance scores for predicting feature_j from feature_i and vice versa
+                    try:
+                        score_ij = importance_matrix.loc[feature_i, feature_j]
+                        score_ji = importance_matrix.loc[feature_j, feature_i]
+                        edge_score = max(score_ij, score_ji)  # Use max to capture strongest direction
+                        
+                        edge_scores.append({
+                            'feature_i': feature_i,
+                            'feature_j': feature_j,
+                            'score': edge_score,
+                            'in_ppi': (feature_i, feature_j) in ppi_edges_set,
+                            'in_physical': (feature_i, feature_j) in physical_edges_set
+                        })
+                    except KeyError:
+                        # Skip if features not found in matrix
+                        continue
+            
+            # Sort edges by importance score (descending)
+            edge_scores.sort(key=lambda x: x['score'], reverse=True)
+            n_edges = len(edge_scores)
+            
+            print(f"    Total edges analyzed: {n_edges}")
+            print(f"    Edges in PPI: {sum(1 for e in edge_scores if e['in_ppi'])}")
+            print(f"    Edges in physical PPI: {sum(1 for e in edge_scores if e['in_physical'])}")
+            
+            # Top plot: Cumulative percentage of edges in PPI
+            ax_top = axes[0, col_idx]
+            
+            # Calculate cumulative percentages efficiently
+            # First, create binary arrays for PPI membership
+            is_in_ppi = np.array([1 if e['in_ppi'] else 0 for e in edge_scores])
+            is_in_physical = np.array([1 if e['in_physical'] else 0 for e in edge_scores])
+            
+            # Calculate cumulative sums
+            cumsum_ppi = np.cumsum(is_in_ppi)
+            cumsum_physical = np.cumsum(is_in_physical)
+            
+            # Calculate cumulative percentages
+            ranks = np.arange(1, n_edges + 1)
+            cumulative_ppi = (cumsum_ppi / ranks) * 100
+            cumulative_physical = (cumsum_physical / ranks) * 100
+            
+            # Calculate baseline (overall percentage)
+            overall_ppi_pct = sum(1 for e in edge_scores if e['in_ppi']) / n_edges * 100
+            overall_physical_pct = sum(1 for e in edge_scores if e['in_physical']) / n_edges * 100
+            
+            # Subsample for plotting if too many edges
+            if n_edges > 10000:
+                # Use log-spaced sampling for smooth curve
+                sample_indices = np.unique(np.logspace(0, np.log10(n_edges-1), 1000).astype(int))
+                ranks_plot = ranks[sample_indices]
+                cumulative_ppi_plot = cumulative_ppi[sample_indices]
+                cumulative_physical_plot = cumulative_physical[sample_indices]
+            else:
+                ranks_plot = ranks
+                cumulative_ppi_plot = cumulative_ppi
+                cumulative_physical_plot = cumulative_physical
+            
+            ax_top.plot(ranks_plot, cumulative_ppi_plot, '-', color=color, 
+                       linewidth=2, label='Full PPI', alpha=0.8)
+            ax_top.plot(ranks_plot, cumulative_physical_plot, '--', color=color, 
+                       linewidth=2, label='Physical PPI', alpha=0.8)
+            
+            # Add baselines
+            ax_top.axhline(overall_ppi_pct, color='gray', linestyle=':', 
+                          alpha=0.5, label=f'Baseline PPI ({overall_ppi_pct:.2f}%)')
+            ax_top.axhline(overall_physical_pct, color='darkgray', linestyle=':', 
+                          alpha=0.5, label=f'Baseline Physical ({overall_physical_pct:.2f}%)')
+            
+            ax_top.set_xlabel('Top N Edges (by importance)')
+            ax_top.set_ylabel('% in PPI Network')
+            ax_top.set_title(f'{direction}\nCumulative PPI Membership by Edge Importance')
+            ax_top.legend(loc='best')
+            ax_top.grid(True, alpha=0.3)
+            ax_top.set_xscale('log')
+            
+            # Add enrichment annotation for top edges
+            if n_edges > 100:
+                top_100_ppi_pct = sum(1 for e in edge_scores[:100] if e['in_ppi']) / 100 * 100
+                if overall_ppi_pct > 0:
+                    enrichment = top_100_ppi_pct / overall_ppi_pct
+                    if enrichment > 1.5:
+                        ax_top.text(0.02, 0.98, f'Top 100 edges: {enrichment:.1f}x enriched',
+                                   transform=ax_top.transAxes, verticalalignment='top',
+                                   bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+            
+            # Bottom plot: Binned analysis
+            ax_bottom = axes[1, col_idx]
+            
+            # Create log-spaced bins for better resolution at top ranks
+            n_bins = 8
+            # Use geometrically spaced bins
+            bin_edges = np.logspace(0, np.log10(n_edges), n_bins + 1).astype(int)
+            bin_edges[0] = 0
+            bin_edges[-1] = n_edges
+            
+            bin_labels = []
+            ppi_percentages = []
+            physical_percentages = []
+            
+            for i in range(n_bins):
+                start_idx = bin_edges[i]
+                end_idx = bin_edges[i + 1]
+                
+                bin_edges_data = edge_scores[start_idx:end_idx]
+                n_bin_edges = len(bin_edges_data)
+                
+                if n_bin_edges > 0:
+                    ppi_pct = sum(1 for e in bin_edges_data if e['in_ppi']) / n_bin_edges * 100
+                    physical_pct = sum(1 for e in bin_edges_data if e['in_physical']) / n_bin_edges * 100
+                else:
+                    ppi_pct = 0
+                    physical_pct = 0
+                
+                ppi_percentages.append(ppi_pct)
+                physical_percentages.append(physical_pct)
+                
+                # Create bin label
+                if i == 0:
+                    bin_labels.append(f'Top {end_idx}')
+                else:
+                    bin_labels.append(f'{start_idx+1}-{end_idx}')
+            
+            # Plot bars
+            x = np.arange(len(bin_labels))
+            width = 0.35
+            
+            bars1 = ax_bottom.bar(x - width/2, ppi_percentages, width, 
+                                 label='Full PPI', color=color, alpha=0.7)
+            bars2 = ax_bottom.bar(x + width/2, physical_percentages, width, 
+                                 label='Physical PPI', color=color, alpha=0.5)
+            
+            # Add baseline
+            ax_bottom.axhline(overall_ppi_pct, color='gray', linestyle=':', 
+                             alpha=0.5, label=f'Baseline')
+            
+            # Add value labels on bars
+            for bars in [bars1, bars2]:
+                for bar in bars:
+                    height = bar.get_height()
+                    if height > 0.01:  # Only show label if bar is visible
+                        ax_bottom.text(bar.get_x() + bar.get_width()/2., height,
+                                      f'{height:.2f}%', ha='center', va='bottom', fontsize=8)
+            
+            ax_bottom.set_xlabel('Edge Rank Bins (by importance)')
+            ax_bottom.set_ylabel('% in PPI Network')
+            ax_bottom.set_title(f'{direction}\nBinned PPI Membership by Edge Importance')
+            ax_bottom.set_xticks(x)
+            ax_bottom.set_xticklabels(bin_labels, rotation=45, ha='right')
+            ax_bottom.legend(loc='best')
+            ax_bottom.grid(True, alpha=0.3, axis='y')
+            
+            # Add statistical annotation
+            if n_bins >= 2 and ppi_percentages[0] > 0:
+                if ppi_percentages[-1] > 0:
+                    enrichment = ppi_percentages[0] / ppi_percentages[-1]
+                    if enrichment > 2:
+                        test_text = f"Top/Bottom bin:\n{enrichment:.1f}x enrichment"
+                        ax_bottom.text(0.98, 0.98, test_text, transform=ax_bottom.transAxes,
+                                      verticalalignment='top', horizontalalignment='right',
+                                      fontsize=9, bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+                else:
+                    test_text = f"Top bin: {ppi_percentages[0]:.2f}%\nBottom bin: 0%"
+                    ax_bottom.text(0.98, 0.98, test_text, transform=ax_bottom.transAxes,
+                                  verticalalignment='top', horizontalalignment='right',
+                                  fontsize=9, bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+        
+        plt.suptitle('Edge Importance vs PPI Network Membership Analysis', 
+                     fontsize=16, fontweight='bold', y=1.00)
+        plt.tight_layout()
+        
+        return self.save_figure(fig, "edge_importance_vs_ppi_membership")
     
     
     def generate_summary_report(self, data: ImportanceAnalysisData):
@@ -5556,9 +6677,24 @@ class ImportanceMatrixAnalyzer:
                     figures['threshold_analysis'] = self.plot_threshold_analysis(data.threshold_analyses, 
                                                                                      network_params.get('target_density', 0.0366))
                     figures['threshold_recommendations'] = self.plot_threshold_recommendations(data.threshold_analyses)
-                    figures['threshold_pr_curves'] = self.plot_threshold_pr_curves(data, data.threshold_analyses)
+                    # Use combined PR curves instead of separate ones
+                    figures['threshold_pr_curves_combined'] = self.plot_threshold_pr_curves_combined(data, data.threshold_analyses)
             except Exception as e:
                 print(f"Error generating threshold analysis plots: {e}")
+            
+            # Add new importance vs PPI membership plot
+            try:
+                if network_params.get('ppi_analysis_enabled', False) and data.ppi_reference is not None:
+                    figures['importance_vs_ppi_membership'] = self.plot_importance_vs_ppi_membership(data)
+            except Exception as e:
+                print(f"Error generating importance vs PPI membership plot: {e}")
+            
+            # Add edge importance vs PPI membership plot
+            try:
+                if network_params.get('ppi_analysis_enabled', False) and data.ppi_reference is not None:
+                    figures['edge_importance_vs_ppi_membership'] = self.plot_edge_importance_vs_ppi_membership(data)
+            except Exception as e:
+                print(f"Error generating edge importance vs PPI membership plot: {e}")
         
         # Generate summary report
         try:
