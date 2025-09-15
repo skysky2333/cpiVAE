@@ -1,0 +1,1587 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Cross-platform Proteomics Imputation using Variational Autoencoders">
+      
+      
+        <meta name="author" content="Sky">
+      
+      
+        <link rel="canonical" href="https://skysky2333.github.io/cpiVAE/tune/">
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../train/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.20">
+    
+    
+      
+        <title>Model Tuning - cpiVAE</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.e53b48f4.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#hyperparameter-tuning-tunepy" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="cpiVAE" class="md-header__button md-logo" aria-label="cpiVAE" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            cpiVAE
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Model Tuning
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/skysky2333/cpiVAE" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    skysky2333/cpiVAE
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="cpiVAE" class="md-nav__button md-logo" aria-label="cpiVAE" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    cpiVAE
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/skysky2333/cpiVAE" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    skysky2333/cpiVAE
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting Started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Model Tuning
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model Tuning
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required Arguments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional Arguments
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optimization-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optimization Strategy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Optimization Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#objective-function" class="md-nav__link">
+    <span class="md-ellipsis">
+      Objective Function
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperparameter-search-space" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hyperparameter Search Space
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hyperparameter Search Space">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#model-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Model Architecture
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#training-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Network Architecture
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loss-function-weights" class="md-nav__link">
+    <span class="md-ellipsis">
+      Loss Function Weights
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output Files
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output Files">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#study-database" class="md-nav__link">
+    <span class="md-ellipsis">
+      Study Database
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#best-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensorboard-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      TensorBoard Logs
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extended-tuning-with-custom-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extended Tuning with Custom Parameters
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pruning-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pruning Strategy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#early-stopping" class="md-nav__link">
+    <span class="md-ellipsis">
+      Early Stopping
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Error Handling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Considerations
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#computational-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Computational Requirements
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tuning-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tuning Strategy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#study-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Study Management
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#study-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      Study Analysis
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      Common Issues
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../train/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Training
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../impute/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Imputation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Methods
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Methods
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../baselines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Baselines
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quality_control/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quality Control
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Analysis
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Analysis
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Comparison
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../feature_importance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Feature Importance
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../latent_space/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Latent Space
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../confidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Confidence & Analysis
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../phenotype_association/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Phenotype Association
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required Arguments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional Arguments
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optimization-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optimization Strategy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Optimization Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#objective-function" class="md-nav__link">
+    <span class="md-ellipsis">
+      Objective Function
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperparameter-search-space" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hyperparameter Search Space
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hyperparameter Search Space">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#model-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Model Architecture
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#training-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Network Architecture
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loss-function-weights" class="md-nav__link">
+    <span class="md-ellipsis">
+      Loss Function Weights
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output Files
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output Files">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#study-database" class="md-nav__link">
+    <span class="md-ellipsis">
+      Study Database
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#best-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensorboard-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      TensorBoard Logs
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extended-tuning-with-custom-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extended Tuning with Custom Parameters
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pruning-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pruning Strategy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#early-stopping" class="md-nav__link">
+    <span class="md-ellipsis">
+      Early Stopping
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Error Handling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Considerations
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#computational-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Computational Requirements
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tuning-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tuning Strategy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#study-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Study Management
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#study-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      Study Analysis
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      Common Issues
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/skysky2333/cpiVAE/edit/main/docs/tune.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/skysky2333/cpiVAE/raw/main/docs/tune.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="hyperparameter-tuning-tunepy">Hyperparameter Tuning (<code>tune.py</code>)<a class="headerlink" href="#hyperparameter-tuning-tunepy" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>The <code>tune.py</code> script performs Bayesian hyperparameter optimization for cpiVAE models using Optuna. It optimizes model parameters based on cross-imputation correlation performance, which is the key metric for evaluating cross-platform proteomics data translation quality.</p>
+<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/tune.py<span class="w"> </span>--config<span class="w"> </span>CONFIG_FILE<span class="w"> </span>--platform_a<span class="w"> </span>PLATFORM_A_FILE<span class="w"> </span>--platform_b<span class="w"> </span>PLATFORM_B_FILE<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div>
+<h3 id="required-arguments">Required Arguments<a class="headerlink" href="#required-arguments" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>--config</code>: Path to base configuration YAML file (e.g., <code>configs/default.yaml</code>)</li>
+<li><code>--platform_a</code>: Path to platform A CSV file (training data)</li>
+<li><code>--platform_b</code>: Path to platform B CSV file (training data)</li>
+</ul>
+<h3 id="optional-arguments">Optional Arguments<a class="headerlink" href="#optional-arguments" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>--output_dir</code>: Output directory for Optuna study and logs (default: <code>outputs_tune</code>)</li>
+<li><code>--study_name</code>: Name of the Optuna study (default: <code>joint_vae_study</code>)</li>
+<li><code>--n_trials</code>: Number of optimization trials (default: 50)</li>
+<li><code>--max_epochs</code>: Maximum epochs per trial (default: 50, reduced for faster tuning)</li>
+</ul>
+<h2 id="optimization-strategy">Optimization Strategy<a class="headerlink" href="#optimization-strategy" title="Permanent link">&para;</a></h2>
+<h3 id="objective-function">Objective Function<a class="headerlink" href="#objective-function" title="Permanent link">&para;</a></h3>
+<p>The hyperparameter optimizer maximizes the average cross-imputation mean per-feature correlation across both platforms</p>
+<h3 id="hyperparameter-search-space">Hyperparameter Search Space<a class="headerlink" href="#hyperparameter-search-space" title="Permanent link">&para;</a></h3>
+<h4 id="model-architecture">Model Architecture<a class="headerlink" href="#model-architecture" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Learning rate</strong>: Log-uniform distribution [1e-5, 1e-2]</li>
+<li><strong>Latent dimensions</strong>: Categorical [16, 32, 64, 128, 256]</li>
+<li><strong>Dropout rate</strong>: Uniform [0.1, 0.5]</li>
+<li><strong>Activation function</strong>: Categorical ['relu', 'leaky_relu', 'gelu', 'swish']</li>
+<li><strong>Batch normalization</strong>: Boolean [True, False]</li>
+<li><strong>Residual connections</strong>: Boolean [True, False]</li>
+</ul>
+<h4 id="training-parameters">Training Parameters<a class="headerlink" href="#training-parameters" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Optimizer</strong>: Categorical ['adam', 'adamw']</li>
+<li><strong>Batch size</strong>: Categorical [32, 64, 128, 256]</li>
+<li><strong>Gradient clipping</strong>: Uniform [0.5, 2.0]</li>
+<li><strong>Gaussian noise std</strong>: Log-uniform [0.001, 0.5]</li>
+</ul>
+<h4 id="network-architecture">Network Architecture<a class="headerlink" href="#network-architecture" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Encoder layers</strong>: 1-3 layers, each with size [64, 128, 256, 512, 1024]</li>
+<li><strong>Decoder layers</strong>: 1-3 layers, each with size [64, 128, 256, 512, 1024]</li>
+</ul>
+<h4 id="loss-function-weights">Loss Function Weights<a class="headerlink" href="#loss-function-weights" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Reconstruction weight</strong>: Uniform [0.5, 2.0]</li>
+<li><strong>KL divergence weight</strong>: Log-uniform [1e-4, 1e-1]</li>
+<li><strong>Cross-reconstruction weight</strong>: Uniform [0.5, 2.0]</li>
+<li><strong>Latent alignment weight</strong>: Uniform [0.5, 2.0]</li>
+<li><strong>Alignment type</strong>: Categorical ['mse', 'kl_divergence', 'mmd']</li>
+</ul>
+<h2 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h2>
+<h3 id="study-database">Study Database<a class="headerlink" href="#study-database" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>{output_dir}/{study_name}.db</code>: SQLite database containing all trial results</li>
+<li>Allows resuming interrupted studies with <code>load_if_exists=True</code></li>
+</ul>
+<h3 id="best-configuration">Best Configuration<a class="headerlink" href="#best-configuration" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>{output_dir}/{study_name}_best_config.yaml</code>: Optimized configuration file</li>
+<li>Ready to use with <code>train.py</code> script</li>
+</ul>
+<h3 id="tensorboard-logs">TensorBoard Logs<a class="headerlink" href="#tensorboard-logs" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>{output_dir}/tensorboard_logs/{study_name}/trial_{N}/</code>: Per-trial training logs</li>
+<li>View with: <code>tensorboard --logdir {output_dir}/tensorboard_logs</code></li>
+</ul>
+<h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
+<h3 id="basic-tuning">Basic Tuning<a class="headerlink" href="#basic-tuning" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/tune.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--config<span class="w"> </span>configs/default.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--platform_a<span class="w"> </span>data/olink_overlap_train.csv<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--platform_b<span class="w"> </span>data/somascan_overlap_train.csv
+</code></pre></div>
+<h3 id="extended-tuning-with-custom-parameters">Extended Tuning with Custom Parameters<a class="headerlink" href="#extended-tuning-with-custom-parameters" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/tune.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--config<span class="w"> </span>configs/default.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--platform_a<span class="w"> </span>data/olink_overlap_train.csv<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--platform_b<span class="w"> </span>data/somascan_overlap_train.csv<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--output_dir<span class="w"> </span>outputs_extensive_tune<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--study_name<span class="w"> </span>extensive_joint_vae_study<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--n_trials<span class="w"> </span><span class="m">100</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--max_epochs<span class="w"> </span><span class="m">30</span>
+</code></pre></div>
+<h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
+<h3 id="pruning-strategy">Pruning Strategy<a class="headerlink" href="#pruning-strategy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Uses MedianPruner to terminate unpromising trials early</li>
+<li>Startup trials: 5</li>
+<li>Warmup steps: 10</li>
+<li>Evaluation interval: 5 steps</li>
+</ul>
+<h3 id="early-stopping">Early Stopping<a class="headerlink" href="#early-stopping" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Monitors <code>val_cross_a_corr_mean</code> (validation cross-imputation correlation)</li>
+<li>Mode: maximize correlation</li>
+<li>Patience: 10 epochs</li>
+</ul>
+<h3 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Failed trials return <code>-inf</code> to exclude from optimization</li>
+<li>Study can be resumed if interrupted</li>
+<li>Detailed error logging for debugging</li>
+</ul>
+<h2 id="performance-considerations">Performance Considerations<a class="headerlink" href="#performance-considerations" title="Permanent link">&para;</a></h2>
+<h3 id="computational-requirements">Computational Requirements<a class="headerlink" href="#computational-requirements" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Each trial trains a full model (up to <code>max_epochs</code>)</li>
+<li>Memory usage scales with batch size and model architecture</li>
+<li>GPU acceleration recommended for faster trials</li>
+</ul>
+<h3 id="tuning-strategy">Tuning Strategy<a class="headerlink" href="#tuning-strategy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Start with 50 trials for initial exploration</li>
+<li>Use shorter <code>max_epochs</code> (30-50) for faster iteration</li>
+<li>Increase trials (100+) for production hyperparameters</li>
+</ul>
+<h3 id="study-management">Study Management<a class="headerlink" href="#study-management" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Study results persist in SQLite database</li>
+<li>Multiple studies can run in parallel with different names</li>
+<li>Resume interrupted studies automatically</li>
+</ul>
+<h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Data Preparation</strong>: Ensure training data is properly split and preprocessed</li>
+<li><strong>Configuration Base</strong>: Start with a reasonable base configuration</li>
+<li><strong>Resource Planning</strong>: Allocate sufficient GPU memory and time</li>
+<li><strong>Study Naming</strong>: Use descriptive study names for organization</li>
+<li><strong>Result Analysis</strong>: Review TensorBoard logs to understand trial progression</li>
+</ol>
+<h3 id="study-analysis">Study Analysis<a class="headerlink" href="#study-analysis" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">optuna</span>
+
+<span class="c1"># Load and analyze study</span>
+<span class="n">study</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">load_study</span><span class="p">(</span><span class="n">study_name</span><span class="o">=</span><span class="s2">&quot;joint_vae_study&quot;</span><span class="p">,</span> 
+                         <span class="n">storage</span><span class="o">=</span><span class="s2">&quot;sqlite:///outputs_tune/joint_vae_study.db&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Best value: </span><span class="si">{</span><span class="n">study</span><span class="o">.</span><span class="n">best_value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Best params: </span><span class="si">{</span><span class="n">study</span><span class="o">.</span><span class="n">best_params</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># Plot optimization history</span>
+<span class="n">optuna</span><span class="o">.</span><span class="n">visualization</span><span class="o">.</span><span class="n">plot_optimization_history</span><span class="p">(</span><span class="n">study</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="common-issues">Common Issues<a class="headerlink" href="#common-issues" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Out of memory</strong>: Reduce <code>max_epochs</code> or trial batch sizes</li>
+<li><strong>Slow convergence</strong>: Increase <code>n_trials</code> or adjust search space</li>
+<li><strong>Database conflicts</strong>: Use unique study names for parallel runs</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 cpiVAE Project
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": ["navigation.path", "navigation.top", "navigation.instant", "navigation.tracking", "search.highlight", "search.share", "search.suggest", "content.action.edit", "content.action.view", "content.code.copy", "content.code.annotate", "content.tabs.link", "toc.follow"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+    
+  </body>
+</html>
