@@ -199,4 +199,5 @@ python scripts/cis_pQTL_analysis.py \
     --method2_name "WNN" \
     --method3_name "Permuted" \
     --method4_name "Random" \
-    --significance_threshold 1e-06
+    --significance_threshold 1e-06 \
+    --maf_threshold 0.01

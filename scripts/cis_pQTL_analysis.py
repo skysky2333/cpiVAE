@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.patches import Patch
 from matplotlib.gridspec import GridSpec
+from matplotlib.colors import LogNorm
 import matplotlib.patches as mpatches
 
 from scipy import stats
@@ -111,6 +112,7 @@ class pQTLData:
     
     significance_threshold: float = 0.05
     
+    maf_filtered: Dict[str, pd.DataFrame] = None  # Data after MAF filtering
     significant_hits: Dict[str, pd.DataFrame] = None
     overlap_analysis: Dict[str, any] = None
     effect_size_analysis: Dict[str, any] = None
@@ -130,18 +132,20 @@ class CispQTLAnalyzer:
     """
     
     def __init__(self, output_dir: str = "cis_pqtl_analysis", significance_threshold: float = 0.05, 
-                 truth_threshold: float = None):
+                 truth_threshold: float = None, maf_threshold: float = 0.01):
         """Initialize the cis-pQTL analyzer.
         
         Args:
             output_dir: Directory for saving analysis results
             significance_threshold: P-value threshold for significance
             truth_threshold: Fixed p-value threshold for truth dataset in PR analysis (defaults to significance_threshold)
+            maf_threshold: Minor Allele Frequency threshold for filtering variants
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.significance_threshold = significance_threshold
         self.truth_threshold = truth_threshold if truth_threshold is not None else significance_threshold
+        self.maf_threshold = maf_threshold
         
         (self.output_dir / "figures").mkdir(exist_ok=True)
         (self.output_dir / "data").mkdir(exist_ok=True)
@@ -258,6 +262,69 @@ class CispQTLAnalyzer:
             print(f"  {name}: {len(sig_df)} significant hits (p < {data.significance_threshold})")
         
         data.significant_hits = significant_hits
+        return data
+    
+    def filter_by_maf(self, data: pQTLData) -> pQTLData:
+        """Filter associations based on Minor Allele Frequency threshold.
+        
+        Removes variants with allele frequency below the MAF threshold or above 
+        (1 - MAF threshold), effectively filtering out both rare variants and 
+        near-fixed variants.
+        
+        Args:
+            data: pQTLData object with loaded data
+            
+        Returns:
+            Updated pQTLData object with MAF filtering applied
+        """
+        print(f"Filtering variants by MAF threshold: {self.maf_threshold}")
+        print(f"  Keeping variants with AF in range [{self.maf_threshold}, {1 - self.maf_threshold}]")
+        
+        datasets = {
+            'truth': data.truth,
+            'method1': data.method1,
+            'method2': data.method2,
+            'method3': data.method3,
+            'method4': data.method4
+        }
+        
+        filtered_data = {}
+        for name, df in datasets.items():
+            original_count = len(df)
+            
+            # Check if 'af' column exists
+            if 'af' not in df.columns:
+                print(f"  WARNING: {name} does not have 'af' column, skipping MAF filtering")
+                filtered_data[name] = df
+                continue
+            
+            # Filter based on MAF threshold
+            # Keep variants where AF is between [maf_threshold, 1-maf_threshold]
+            maf_mask = (df['af'] >= self.maf_threshold) & (df['af'] <= (1 - self.maf_threshold))
+            filtered_df = df[maf_mask].copy()
+            
+            filtered_count = len(filtered_df)
+            removed_count = original_count - filtered_count
+            
+            print(f"  {name}: {filtered_count}/{original_count} variants kept ({removed_count} removed by MAF filter)")
+            filtered_data[name] = filtered_df
+        
+        # Update data object with filtered dataframes
+        data.truth = filtered_data['truth']
+        data.method1 = filtered_data['method1']
+        data.method2 = filtered_data['method2']
+        data.method3 = filtered_data['method3']
+        data.method4 = filtered_data['method4']
+        
+        # Store MAF-filtered data separately for p-value comparisons
+        data.maf_filtered = {
+            'truth': filtered_data['truth'].copy(),
+            'method1': filtered_data['method1'].copy(),
+            'method2': filtered_data['method2'].copy(),
+            'method3': filtered_data['method3'].copy(),
+            'method4': filtered_data['method4'].copy()
+        }
+        
         return data
     
     def analyze_overlaps(self, data: pQTLData) -> pQTLData:
@@ -915,8 +982,8 @@ class CispQTLAnalyzer:
         """
         print("Generating Figure 1: Overlap analysis dashboard...")
         
-        fig = plt.figure(figsize=(8, 16))
-        gs = GridSpec(4, 2, figure=fig, hspace=0.3, wspace=0.3)
+        fig = plt.figure(figsize=(16, 12))
+        gs = GridSpec(4, 2, figure=fig, hspace=0.25, wspace=0.25)
         
         fig.suptitle('cis-pQTL Analysis: Method vs Truth Overlap Dashboard', 
                     fontsize=20, fontweight='bold')
@@ -1319,261 +1386,473 @@ class CispQTLAnalyzer:
         plt.tight_layout()
         return fig
     
-    def generate_figure_3_statistical_performance(self, data: pQTLData):
-        """Generate statistical performance comparison figure.
-        
-        Creates comprehensive performance comparison including MAE, correlation,
-        concordance, overlap summaries, and detailed method rankings.
+    
+    def _extract_variant_position(self, variant_id: str) -> Tuple[str, int]:
+        """Extract chromosome and position from variant ID.
         
         Args:
-            data: pQTLData object with complete analysis results
+            variant_id: Variant ID in format "chr:position" (e.g., "1:1555871")
             
         Returns:
-            matplotlib Figure object
+            Tuple of (chromosome, position) where chromosome is in UCSC format (e.g., "chr1")
         """
-        print("Generating Figure 3: Statistical performance comparison...")
+        parts = variant_id.split(':')
+        if len(parts) != 2:
+            raise ValueError(f"Invalid variant_id format: {variant_id}")
         
-        fig = plt.figure(figsize=(16, 10))
-        gs = GridSpec(2, 3, figure=fig, hspace=0.3, wspace=0.3)
+        chrom = parts[0]
+        # Convert to UCSC format if needed
+        if not chrom.startswith('chr'):
+            chrom = f'chr{chrom}'
         
-        fig.suptitle('Statistical Performance Analysis', fontsize=20, fontweight='bold')
+        try:
+            position = int(parts[1])
+        except ValueError:
+            raise ValueError(f"Invalid position in variant_id: {variant_id}")
         
+        return chrom, position
+    
+    def _format_browser_track_entry(self, chrom: str, start: int, end: int, 
+                                  name: str, score: float) -> str:
+        """Format a single BED track entry for UCSC Genome Browser.
+        
+        Args:
+            chrom: Chromosome (e.g., "chr1")
+            start: Start position (0-based)
+            end: End position (1-based, typically start+1 for SNPs)
+            name: Feature name (e.g., "GENE:rsID")
+            score: Score value (0-1000, typically based on -log10(p-value))
+            
+        Returns:
+            Formatted BED line string
+        """
+        # Ensure score is within valid range (0-1000)
+        score = min(1000, max(0, int(score)))
+        
+        return f"{chrom}\t{start}\t{end}\t{name}\t{score}\n"
+    
+    def _calculate_browser_score(self, pval: float, max_score: int = 1000) -> int:
+        """Calculate UCSC browser score from p-value.
+        
+        Score is based on -log10(p-value), scaled to 0-1000 range.
+        More significant p-values get higher scores.
+        
+        Args:
+            pval: P-value
+            max_score: Maximum score value (default 1000)
+            
+        Returns:
+            Integer score between 0 and max_score
+        """
+        if pval <= 0 or np.isnan(pval):
+            return 0
+        
+        # Calculate -log10(p-value)
+        neg_log_p = -np.log10(pval)
+        
+        # Scale to 0-1000 range
+        # P-value of 1e-10 maps to score 1000
+        # P-value of 0.05 maps to score ~130
+        score = int(neg_log_p * 100)
+        
+        return min(max_score, max(0, score))
+    
+    def plot_pval_slope_comparison(self, data: pQTLData) -> plt.Figure:
+        """Create combined p-value and slope comparison plots using density visualization.
+        
+        Creates a two-row figure with p-value comparisons (top) and slope comparisons (bottom)
+        for each imputation method vs truth. Uses hexbin density plots to better visualize
+        overlapping points. P-value plots include all MAF-filtered hits, while slope plots 
+        include only hits passing both p-value and MAF cutoffs.
+        
+        The red dashed lines in p-value plots indicate the significance threshold (p=0.05),
+        dividing the plot into quadrants for true/false positives and negatives.
+        
+        Args:
+            data: pQTLData object containing analysis results
+            
+        Returns:
+            matplotlib Figure object with comparison plots
+        """
+        print("Creating p-value and slope comparison plots...")
+        
+        # Check if we have the necessary data
+        if not data.maf_filtered:
+            print("  WARNING: No MAF-filtered data available, skipping p-value/slope comparison plots")
+            return None
+            
+        if not data.effect_size_analysis:
+            print("  WARNING: No effect size analysis available, skipping slope comparison plots")
+            # Still create the figure but only with p-value plots
+            
+        # Prepare method data
+        methods = ['method1', 'method2', 'method3', 'method4']
+        method_names = data.method_names
         method_colors = [NATURE_COLORS['secondary'], NATURE_COLORS['accent'], 
                         NATURE_COLORS['neutral'], NATURE_COLORS['highlight']]
         
-        # Panel A: MAE comparison
-        ax1 = fig.add_subplot(gs[0, 0])
-        self._create_mae_comparison(ax1, data.effect_size_analysis, method_colors)
+        # Create figure with 2 rows x 4 columns
+        fig = plt.figure(figsize=(20, 10))
+        gs = GridSpec(2, 4, figure=fig, hspace=0.3, wspace=0.25)
         
-        # Panel B: Correlation comparison
-        ax2 = fig.add_subplot(gs[0, 1])
-        self._create_correlation_comparison(ax2, data.effect_size_analysis, method_colors)
+        # Prepare truth data with assoc_id (once, outside the loop)
+        truth_maf = data.maf_filtered['truth'].copy()
+        truth_maf = truth_maf[truth_maf['pval_nominal'] < 1]  # Remove invalid p-values
+        truth_maf['assoc_id'] = truth_maf['phenotype_id'] + ':' + truth_maf['variant_id']
         
-        # Panel C: Concordance comparison
-        ax3 = fig.add_subplot(gs[0, 2])
-        self._create_concordance_comparison(ax3, data.effect_size_analysis, method_colors)
+        for i, (method, method_name) in enumerate(zip(methods, method_names)):
+            print(f"  Processing {method_name}...")
+            
+            if method not in data.maf_filtered:
+                print(f"    Skipping {method_name}: no MAF-filtered data")
+                continue
+                
+            # Get MAF-filtered data for this method
+            method_maf = data.maf_filtered[method].copy()
+            method_maf = method_maf[method_maf['pval_nominal'] < 1]  # Remove invalid p-values
+            method_maf['assoc_id'] = method_maf['phenotype_id'] + ':' + method_maf['variant_id']
+            
+            # Panel 1: P-value comparison (all MAF-filtered hits)
+            ax1 = fig.add_subplot(gs[0, i])
+            
+            # Efficient matching using merge
+            merged_pval = pd.merge(
+                truth_maf[['assoc_id', 'pval_nominal']],
+                method_maf[['assoc_id', 'pval_nominal']],
+                on='assoc_id',
+                suffixes=('_truth', '_method')
+            )
+            
+            if len(merged_pval) == 0:
+                print(f"    No common associations for {method_name}")
+                ax1.text(0.5, 0.5, f'No common associations\nfor {method_name}', 
+                        ha='center', va='center', transform=ax1.transAxes)
+                ax2 = fig.add_subplot(gs[1, i])
+                ax2.text(0.5, 0.5, f'No data available', 
+                        ha='center', va='center', transform=ax2.transAxes)
+                continue
+            
+            truth_pvals = merged_pval['pval_nominal_truth'].values
+            method_pvals = merged_pval['pval_nominal_method'].values
+            
+            if len(truth_pvals) > 0:
+                # Convert to numpy arrays and add small epsilon to avoid log(0)
+                truth_pvals = np.array(truth_pvals) + 1e-300
+                method_pvals = np.array(method_pvals) + 1e-300
+                
+                # Calculate correlation
+                pearson_r, _ = pearsonr(np.log10(truth_pvals), np.log10(method_pvals))
+                
+                # Create hexbin density plot on log scale
+                # Use hexbin for better visualization of overlapping points
+                # Use log scale for bins to better show density range
+                hb1 = ax1.hexbin(truth_pvals, method_pvals, 
+                                 xscale='log', yscale='log',
+                                 gridsize=50, cmap='Blues', mincnt=1,
+                                 norm=LogNorm(), edgecolors='none', linewidths=0)
+                
+                # Add colorbar for density (log scale)
+                cb1 = plt.colorbar(hb1, ax=ax1)
+                cb1.set_label('Count (log scale)', fontsize=8)
+                
+                # Add significance threshold lines
+                ax1.axhline(y=self.significance_threshold, color='red', linestyle='--', 
+                          alpha=0.7, linewidth=1.5, label=f'p={self.significance_threshold}')
+                ax1.axvline(x=self.significance_threshold, color='red', linestyle='--', 
+                          alpha=0.7, linewidth=1.5)
+                
+                # Note: log scale already set by hexbin
+                
+                # Labels and title
+                ax1.set_xlabel('Truth p-value')
+                ax1.set_ylabel(f'{method_name} p-value')
+                ax1.set_title(f'{method_name}\nP-value Comparison')
+                
+                # Add statistics text
+                ax1.text(0.05, 0.95, f'n = {len(truth_pvals)}\nr = {pearson_r:.3f}',
+                        transform=ax1.transAxes, fontsize=10, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+                
+                ax1.grid(True, alpha=0.3)
+            
+            # Panel 2: Slope comparison (hits passing both p-value and MAF cutoffs)
+            ax2 = fig.add_subplot(gs[1, i])
+            
+            # Use pre-computed effect size analysis if available
+            if data.effect_size_analysis and method in data.effect_size_analysis:
+                effect_data = data.effect_size_analysis[method]
+                truth_slopes = effect_data['truth_slopes']
+                method_slopes = effect_data['method_slopes']
+                
+                
+                if len(truth_slopes) > 0 and len(method_slopes) > 0:
+                    # Use the pre-computed statistics from effect_data
+                    pearson_r = effect_data.get('pearson_r', 0)
+                    spearman_r = effect_data.get('spearman_r', 0)
+                    mae = effect_data.get('mae', 0)
+                    n_clean = effect_data.get('n_clean', len(truth_slopes))
+                    
+                    # Create hexbin density plot for slopes with log-scale density
+                    # Check if we need to handle negative values for slopes
+                    min_val = min(np.min(truth_slopes), np.min(method_slopes))
+                    max_val = max(np.max(truth_slopes), np.max(method_slopes))
+                    
+                    hb2 = ax2.hexbin(truth_slopes, method_slopes, 
+                                    gridsize=40, cmap='Oranges', mincnt=1,
+                                    norm=LogNorm(), edgecolors='none', linewidths=0,
+                                    extent=[min_val, max_val, min_val, max_val])
+                    
+                    # Add colorbar for density (log scale)
+                    cb2 = plt.colorbar(hb2, ax=ax2)
+                    cb2.set_label('Count (log scale)', fontsize=8)
+                    
+                    # Add regression line
+                    
+                    # Add regression line
+                    if len(truth_slopes) > 1:
+                        z = np.polyfit(truth_slopes, method_slopes, 1)
+                        p = np.poly1d(z)
+                        x_line = np.linspace(np.min(truth_slopes), np.max(truth_slopes), 100)
+                        ax2.plot(x_line, p(x_line), color='red', linewidth=1.5, 
+                               alpha=0.8, label='Regression line')
+                    
+                    # Labels and title
+                    ax2.set_xlabel('Truth Effect Size (slope)')
+                    ax2.set_ylabel(f'{method_name} Effect Size (slope)')
+                    ax2.set_title(f'{method_name}\nSlope Comparison (p<{self.significance_threshold})')
+                    
+                    # Add statistics text
+                    stats_text = f'n = {n_clean}\n'
+                    stats_text += f'Pearson r = {pearson_r:.3f}\n'
+                    stats_text += f'Spearman ρ = {spearman_r:.3f}\n'
+                    stats_text += f'MAE = {mae:.3f}'
+                    
+                    ax2.text(0.05, 0.95, stats_text,
+                            transform=ax2.transAxes, fontsize=9, verticalalignment='top',
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+                    
+                    ax2.legend(loc='lower right', fontsize=9)
+                    ax2.grid(True, alpha=0.3)
+                else:
+                    ax2.text(0.5, 0.5, f'No significant associations\nwith valid slopes', 
+                           ha='center', va='center', transform=ax2.transAxes)
+            else:
+                # No effect size analysis available for this method
+                ax2.text(0.5, 0.5, f'No effect size data available\nfor {method_name}', 
+                       ha='center', va='center', transform=ax2.transAxes)
         
-        # Panel D: Overlap summary
-        ax4 = fig.add_subplot(gs[1, :2])
-        if data.overlap_analysis:
-            self._create_overlap_summary(ax4, data.overlap_analysis['overlap_stats'], method_colors)
-        else:
-            ax4.text(0.5, 0.5, 'Overlap analysis not available', 
-                    ha='center', va='center', transform=ax4.transAxes)
-            ax4.set_title('Overlap Summary')
-        
-        # Panel E: Performance ranking with detailed scores
-        ax5 = fig.add_subplot(gs[1, 2])
-        if data.performance_metrics:
-            self._create_detailed_ranking(ax5, data.performance_metrics, method_colors)
-        else:
-            ax5.text(0.5, 0.5, 'Performance metrics\nnot calculated', 
-                    ha='center', va='center', transform=ax5.transAxes)
-            ax5.set_title('Detailed Performance Scores')
+        # Add main title
+        fig.suptitle('P-value and Effect Size Comparison: Imputed vs Truth', 
+                    fontsize=16, fontweight='bold', y=1.02)
         
         plt.tight_layout()
         return fig
     
-    def _create_mae_comparison(self, ax, effect_analysis, colors):
-        """Create mean absolute error comparison plot for effect sizes.
+    def generate_ucsc_browser_tracks(self, data: pQTLData):
+        """Generate UCSC Genome Browser custom track files for significant cis-pQTL hits.
+        
+        Creates BED format track files for visualization in the UCSC Genome Browser.
+        Generates individual files for truth and each imputation method, plus a combined
+        multi-track file. Only includes associations passing both p-value and MAF cutoffs.
         
         Args:
-            ax: Matplotlib axes object for plotting
-            effect_analysis: Dictionary containing effect size analysis results
-            colors: List of colors for each method
+            data: pQTLData object with significant hits
         """
-        if not effect_analysis:
-            ax.text(0.5, 0.5, 'No effect size analysis', ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Mean Absolute Error Comparison')
-            return
+        print("Generating UCSC Genome Browser tracks...")
         
-        methods = list(effect_analysis.keys())
-        method_names = [effect_analysis[m]['method_name'] for m in methods]
-        mae_values = [effect_analysis[m]['mae'] for m in methods]
-        method_colors = colors[:len(methods)]
+        # Create tracks directory
+        tracks_dir = self.output_dir / "tracks"
+        tracks_dir.mkdir(exist_ok=True)
         
-        bars = ax.bar(range(len(methods)), mae_values, color=method_colors, 
-                     alpha=0.8, edgecolor='black', linewidth=0.5)
+        # Define colors for each dataset (RGB format)
+        track_colors = {
+            'truth': '255,0,0',        # Red
+            'method1': '77,187,213',    # Light Blue
+            'method2': '0,160,135',     # Teal
+            'method3': '60,84,136',     # Dark Blue
+            'method4': '243,155,127'    # Light Red
+        }
         
-        # Add value labels
-        for i, (bar, mae) in enumerate(zip(bars, mae_values)):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(mae_values)*0.01,
-                   f'{mae:.3f}', ha='center', va='bottom', fontweight='bold')
+        # Track names and descriptions
+        track_info = {
+            'truth': ('Truth_cis_pQTL', 'Ground truth cis-pQTL hits'),
+            'method1': (f'{data.method_names[0]}_cis_pQTL', f'{data.method_names[0]} imputed cis-pQTL hits'),
+            'method2': (f'{data.method_names[1]}_cis_pQTL', f'{data.method_names[1]} imputed cis-pQTL hits'),
+            'method3': (f'{data.method_names[2]}_cis_pQTL', f'{data.method_names[2]} imputed cis-pQTL hits'),
+            'method4': (f'{data.method_names[3]}_cis_pQTL', f'{data.method_names[3]} imputed cis-pQTL hits')
+        }
         
-        ax.set_xlabel('Method')
-        ax.set_ylabel('Mean Absolute Error')
-        ax.set_title('Effect Size Accuracy\n(Lower is Better)', fontweight='bold')
-        ax.set_xticks(range(len(methods)))
-        ax.set_xticklabels(method_names, rotation=45, ha='right')
-        ax.grid(True, alpha=0.3, axis='y')
-    
-    def _create_correlation_comparison(self, ax, effect_analysis, colors):
-        """Create correlation comparison plot showing Pearson and Spearman correlations.
+        # Process each dataset
+        all_tracks_content = []
+        track_files_created = []
         
-        Args:
-            ax: Matplotlib axes object for plotting
-            effect_analysis: Dictionary containing effect size analysis results
-            colors: List of colors for each method
-        """
-        if not effect_analysis:
-            ax.text(0.5, 0.5, 'No effect size analysis', ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Correlation Comparison')
-            return
+        for dataset_key in ['truth', 'method1', 'method2', 'method3', 'method4']:
+            if not hasattr(data, dataset_key):
+                continue
+            
+            df = getattr(data, dataset_key)
+            
+            # Filter for significant hits (p-value and MAF cutoffs already applied)
+            sig_df = df[df['pval_nominal'] < self.significance_threshold].copy()
+            
+            if sig_df.empty:
+                print(f"  No significant hits for {dataset_key}, skipping track generation")
+                continue
+            
+            # Sort by p-value
+            sig_df = sig_df.sort_values('pval_nominal')
+            
+            # Prepare track content
+            track_name, track_desc = track_info[dataset_key]
+            track_color = track_colors[dataset_key]
+            
+            # Individual track file
+            track_file = tracks_dir / f"{dataset_key}_cis_pqtl.bed"
+            track_entries = []
+            
+            # Add track header
+            header_lines = []
+            
+            # Determine browser position from first few hits
+            if len(sig_df) > 0:
+                first_variant = sig_df.iloc[0]['variant_id']
+                try:
+                    first_chrom, first_pos = self._extract_variant_position(first_variant)
+                    # Set browser window around first hit
+                    browser_start = max(0, first_pos - 500000)
+                    browser_end = first_pos + 500000
+                    header_lines.append(f"browser position {first_chrom}:{browser_start}-{browser_end}\n")
+                except:
+                    pass
+            
+            header_lines.append(f'track name="{track_name}" description="{track_desc}" '
+                              f'visibility=2 color={track_color} useScore=1\n')
+            header_lines.append("#chrom\tchromStart\tchromEnd\tname\tscore\n")
+            
+            # Process each significant association
+            unique_positions = set()  # To avoid duplicate entries
+            
+            for _, row in sig_df.iterrows():
+                try:
+                    # Extract chromosome and position
+                    chrom, position = self._extract_variant_position(row['variant_id'])
+                    
+                    # Create unique identifier
+                    pos_key = f"{chrom}:{position}"
+                    if pos_key in unique_positions:
+                        continue
+                    unique_positions.add(pos_key)
+                    
+                    # Calculate browser score from p-value
+                    score = self._calculate_browser_score(row['pval_nominal'])
+                    
+                    # Create feature name
+                    feature_name = f"{row['phenotype_id']}:{row['variant_id']}"
+                    
+                    # Format BED entry (0-based start, 1-based end)
+                    entry = self._format_browser_track_entry(
+                        chrom, position-1, position, feature_name, score
+                    )
+                    track_entries.append(entry)
+                    
+                except Exception as e:
+                    print(f"    WARNING: Could not process variant {row['variant_id']}: {e}")
+                    continue
+            
+            # Write individual track file
+            if track_entries:
+                with open(track_file, 'w') as f:
+                    f.writelines(header_lines)
+                    f.writelines(track_entries)
+                
+                print(f"  Created track: {track_file} ({len(track_entries)} features)")
+                track_files_created.append(str(track_file))
+                
+                # Add to combined tracks
+                all_tracks_content.extend(header_lines[1:])  # Skip browser position for multi-track
+                all_tracks_content.extend(track_entries)
+                all_tracks_content.append("\n")  # Add spacing between tracks
         
-        methods = list(effect_analysis.keys())
-        method_names = [effect_analysis[m]['method_name'] for m in methods]
-        pearson_values = [effect_analysis[m]['pearson_r'] for m in methods]
-        spearman_values = [effect_analysis[m]['spearman_r'] for m in methods]
+        # Create combined multi-track file
+        if all_tracks_content:
+            combined_file = tracks_dir / "all_methods_cis_pqtl.bed"
+            
+            # Determine overall browser position
+            all_chroms = []
+            all_positions = []
+            
+            for dataset_key in ['truth', 'method1', 'method2', 'method3', 'method4']:
+                if not hasattr(data, dataset_key):
+                    continue
+                df = getattr(data, dataset_key)
+                sig_df = df[df['pval_nominal'] < self.significance_threshold]
+                
+                for variant_id in sig_df['variant_id'].head(10):  # Sample first 10
+                    try:
+                        chrom, pos = self._extract_variant_position(variant_id)
+                        all_chroms.append(chrom)
+                        all_positions.append(pos)
+                    except:
+                        continue
+            
+            # Write combined file
+            with open(combined_file, 'w') as f:
+                # Add browser position if we have data
+                if all_positions:
+                    median_pos = int(np.median(all_positions))
+                    most_common_chrom = max(set(all_chroms), key=all_chroms.count)
+                    f.write(f"browser position {most_common_chrom}:{median_pos-1000000}-{median_pos+1000000}\n")
+                
+                f.writelines(all_tracks_content)
+            
+            print(f"  Created combined track: {combined_file}")
+            track_files_created.append(str(combined_file))
         
-        x = np.arange(len(methods))
-        width = 0.35
+        # Create README with usage instructions
+        readme_file = tracks_dir / "README_UCSC_tracks.txt"
+        with open(readme_file, 'w') as f:
+            f.write("UCSC Genome Browser Custom Track Files\n")
+            f.write("=" * 50 + "\n\n")
+            f.write("Generated: {}\n".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            f.write(f"Significance threshold: p < {self.significance_threshold}\n")
+            f.write(f"MAF threshold: {self.maf_threshold}\n\n")
+            
+            f.write("Files generated:\n")
+            for track_file in track_files_created:
+                f.write(f"  - {Path(track_file).name}\n")
+            
+            f.write("\n" + "How to use these tracks:" + "\n")
+            f.write("-" * 30 + "\n\n")
+            
+            f.write("Option 1: Upload to UCSC Genome Browser\n")
+            f.write("1. Go to: https://genome.ucsc.edu/cgi-bin/hgCustom\n")
+            f.write("2. Click 'Choose File' and select a .bed file\n")
+            f.write("3. Click 'Submit'\n")
+            f.write("4. The browser will display your custom track\n\n")
+            
+            f.write("Option 2: Paste track contents\n")
+            f.write("1. Go to: https://genome.ucsc.edu/cgi-bin/hgCustom\n")
+            f.write("2. Open a .bed file in a text editor\n")
+            f.write("3. Copy all contents\n")
+            f.write("4. Paste into the 'Paste URLs or data' box\n")
+            f.write("5. Click 'Submit'\n\n")
+            
+            f.write("Track color coding:\n")
+            f.write("  - Truth: Red\n")
+            f.write(f"  - {data.method_names[0]}: Light Blue\n")
+            f.write(f"  - {data.method_names[1]}: Teal\n")
+            f.write(f"  - {data.method_names[2]}: Dark Blue\n")
+            f.write(f"  - {data.method_names[3]}: Light Red\n\n")
+            
+            f.write("Score interpretation:\n")
+            f.write("  - Scores range from 0-1000\n")
+            f.write("  - Higher scores = more significant p-values\n")
+            f.write("  - Score = -log10(p-value) * 100 (capped at 1000)\n")
+            
+        print(f"  Created README: {readme_file}")
+        print(f"  Total track files created: {len(track_files_created)}")
         
-        bars1 = ax.bar(x - width/2, pearson_values, width, label='Pearson r', 
-                      color=colors[:len(methods)], alpha=0.8)
-        bars2 = ax.bar(x + width/2, spearman_values, width, label='Spearman ρ', 
-                      color=colors[:len(methods)], alpha=0.5)
-        
-        ax.set_xlabel('Method')
-        ax.set_ylabel('Correlation Coefficient')
-        ax.set_title('Effect Size Correlation\n(Higher is Better)', fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(method_names, rotation=45, ha='right')
-        ax.legend()
-        ax.grid(True, alpha=0.3, axis='y')
-        ax.set_ylim(0, 1)
-    
-    def _create_concordance_comparison(self, ax, effect_analysis, colors):
-        """Create directional concordance comparison plot for effect sizes.
-        
-        Args:
-            ax: Matplotlib axes object for plotting
-            effect_analysis: Dictionary containing effect size analysis results
-            colors: List of colors for each method
-        """
-        if not effect_analysis:
-            ax.text(0.5, 0.5, 'No effect size analysis', ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Direction Concordance')
-            return
-        
-        methods = list(effect_analysis.keys())
-        method_names = [effect_analysis[m]['method_name'] for m in methods]
-        concordance_values = [effect_analysis[m]['concordance'] for m in methods]
-        
-        bars = ax.bar(range(len(methods)), concordance_values, color=colors[:len(methods)], 
-                     alpha=0.8, edgecolor='black', linewidth=0.5)
-        
-        # Add value labels
-        for i, (bar, conc) in enumerate(zip(bars, concordance_values)):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                   f'{conc:.3f}', ha='center', va='bottom', fontweight='bold')
-        
-        ax.set_xlabel('Method')
-        ax.set_ylabel('Concordance (Direction Agreement)')
-        ax.set_title('Effect Direction Concordance\n(Higher is Better)', fontweight='bold')
-        ax.set_xticks(range(len(methods)))
-        ax.set_xticklabels(method_names, rotation=45, ha='right')
-        ax.grid(True, alpha=0.3, axis='y')
-        ax.set_ylim(0, 1)
-    
-    def _create_overlap_summary(self, ax, overlap_stats, colors):
-        """Create F1 score heatmap summarizing overlap performance across levels.
-        
-        Args:
-            ax: Matplotlib axes object for plotting
-            overlap_stats: Dictionary containing overlap statistics across different levels
-            colors: List of colors for each method
-        """
-        levels = ['phenotype', 'variant', 'association']
-        level_labels = ['Proteins', 'SNPs', 'Associations']
-        methods = ['method1', 'method2', 'method3', 'method4']
-        
-        # Create data matrix for heatmap
-        f1_scores = []
-        for level in levels:
-            level_f1 = [overlap_stats[level][m]['f1_score'] for m in methods]
-            f1_scores.append(level_f1)
-        
-        f1_scores = np.array(f1_scores)
-        
-        # Create heatmap
-        im = ax.imshow(f1_scores, cmap='RdYlBu_r', aspect='auto', vmin=0, vmax=1)
-        
-        # Set ticks and labels
-        ax.set_xticks(np.arange(len(methods)))
-        ax.set_yticks(np.arange(len(levels)))
-        ax.set_xticklabels([overlap_stats['phenotype'][m]['method_name'] for m in methods], 
-                          rotation=45, ha='right')
-        ax.set_yticklabels(level_labels)
-        
-        # Add text annotations
-        for i in range(len(levels)):
-            for j in range(len(methods)):
-                text = ax.text(j, i, f'{f1_scores[i, j]:.2f}', 
-                              ha="center", va="center", color="white" if f1_scores[i, j] < 0.5 else "black", 
-                              fontweight='bold')
-        
-        ax.set_title('F1 Score Summary\n(Method vs Truth Overlap)', fontweight='bold')
-        
-        # Add colorbar
-        cbar = plt.colorbar(im, ax=ax, shrink=0.6)
-        cbar.set_label('F1 Score', rotation=270, labelpad=15)
-    
-    def _create_detailed_ranking(self, ax, performance_metrics, colors):
-        """Create stacked bar chart showing detailed performance score breakdown.
-        
-        Args:
-            ax: Matplotlib axes object for plotting
-            performance_metrics: Dictionary containing performance scores for each method
-            colors: List of colors for each method
-        """
-        methods = ['method1', 'method2', 'method3', 'method4']
-        available_methods = [m for m in methods if m in performance_metrics]
-        
-        # Sort by composite score
-        sorted_methods = sorted(available_methods, 
-                               key=lambda x: performance_metrics[x]['composite_score'], reverse=True)
-        
-        # Prepare data
-        method_names = [performance_metrics[m]['method_name'] for m in sorted_methods]
-        overlap_scores = [performance_metrics[m]['overlap_score'] for m in sorted_methods]
-        effect_scores = [performance_metrics[m]['effect_size_score'] for m in sorted_methods]
-        stat_scores = [performance_metrics[m]['statistical_score'] for m in sorted_methods]
-        discovery_scores = [performance_metrics[m]['discovery_score'] for m in sorted_methods]
-        
-        # Create stacked horizontal bar chart
-        y_pos = np.arange(len(method_names))
-        width = 0.6
-        
-        # Calculate weighted contributions
-        overlap_contrib = [s * 0.4 for s in overlap_scores]
-        effect_contrib = [s * 0.3 for s in effect_scores]
-        stat_contrib = [s * 0.2 for s in stat_scores]
-        discovery_contrib = [s * 0.1 for s in discovery_scores]
-        
-        # Create stacked bars
-        bars1 = ax.barh(y_pos, overlap_contrib, width, label='Overlap (40%)', 
-                       color=NATURE_COLORS['primary'], alpha=0.8)
-        bars2 = ax.barh(y_pos, effect_contrib, width, left=overlap_contrib, 
-                       label='Effect Size (30%)', color=NATURE_COLORS['secondary'], alpha=0.8)
-        bars3 = ax.barh(y_pos, stat_contrib, width, 
-                       left=[o+e for o,e in zip(overlap_contrib, effect_contrib)], 
-                       label='Statistical (20%)', color=NATURE_COLORS['accent'], alpha=0.8)
-        bars4 = ax.barh(y_pos, discovery_contrib, width, 
-                       left=[o+e+s for o,e,s in zip(overlap_contrib, effect_contrib, stat_contrib)], 
-                       label='Discovery (10%)', color=NATURE_COLORS['neutral'], alpha=0.8)
-        
-        # Add total score labels
-        composite_scores = [performance_metrics[m]['composite_score'] for m in sorted_methods]
-        for i, score in enumerate(composite_scores):
-            ax.text(score + 0.01, i, f'{score:.3f}', ha='left', va='center', fontweight='bold')
-        
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(method_names)
-        ax.set_xlabel('Composite Score (Weighted)')
-        ax.set_title('Detailed Performance Breakdown', fontweight='bold')
-        ax.legend(loc='lower right', fontsize=10)
-        ax.grid(True, alpha=0.3, axis='x')
-        ax.set_xlim(0, 1)
+        return track_files_created
     
     def save_figure(self, fig, name: str, **kwargs):
         """Save figure in both PDF and PNG formats.
@@ -1912,6 +2191,9 @@ class CispQTLAnalyzer:
         # Load and validate data
         data = self.load_and_validate_data(file_paths, method_names)
         
+        # Filter by MAF threshold
+        data = self.filter_by_maf(data)
+        
         # Filter for significant hits
         data = self.filter_significant_hits(data)
         
@@ -1946,10 +2228,14 @@ class CispQTLAnalyzer:
             self.save_figure(fig2, "figure_2_effect_size_concordance")
             plt.close(fig2)
         
-        fig3 = self.generate_figure_3_statistical_performance(data)
+        # Generate new p-value and slope comparison plot
+        fig3 = self.plot_pval_slope_comparison(data)
         if fig3:
-            self.save_figure(fig3, "figure_3_statistical_performance")
+            self.save_figure(fig3, "figure_3_pval_slope_comparison")
             plt.close(fig3)
+        
+        # Generate UCSC Genome Browser tracks
+        self.generate_ucsc_browser_tracks(data)
         
         # Save results
         self.save_analysis_results(data, pr_results)
@@ -2024,6 +2310,9 @@ Output:
                        help='P-value threshold for significance (default: 0.05)')
     parser.add_argument('--truth_threshold', type=float, default=None,
                        help='Fixed p-value threshold for truth in PR analysis (defaults to significance_threshold)')
+    parser.add_argument('--maf_threshold', type=float, default=0.01,
+                       help='Minor Allele Frequency threshold for filtering variants (default: 0.01). ' +
+                            'Filters variants with AF < maf_threshold or AF > (1 - maf_threshold)')
     
     args = parser.parse_args()
     
@@ -2055,13 +2344,15 @@ Output:
     print(f"Significance threshold: p < {args.significance_threshold}")
     if args.truth_threshold:
         print(f"Truth threshold for PR analysis: p < {args.truth_threshold}")
+    print(f"MAF threshold: {args.maf_threshold} (filtering AF < {args.maf_threshold} or AF > {1 - args.maf_threshold})")
     print("=" * 50)
     
     # Initialize analyzer
     analyzer = CispQTLAnalyzer(
         output_dir=args.output_dir,
         significance_threshold=args.significance_threshold,
-        truth_threshold=args.truth_threshold
+        truth_threshold=args.truth_threshold,
+        maf_threshold=args.maf_threshold
     )
     
     try:

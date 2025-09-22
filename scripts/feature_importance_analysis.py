@@ -2851,6 +2851,21 @@ class ImportanceMatrixAnalyzer:
                 axes[0, 0].scatter(consistent_important['mean_rank'], consistent_important['rank_variance'], 
                                  color=COLORS['accent'], s=3, label='Consistently Important', alpha=0.8)
             
+            # Label lowest 5 in x-axis (best mean rank) and lowest 5 in y-axis (most consistent)
+            lowest_5_x = rank_stats_a_to_b.nsmallest(5, 'mean_rank')
+            lowest_5_y = rank_stats_a_to_b.nsmallest(5, 'rank_variance')
+            
+            for idx, row in lowest_5_x.iterrows():
+                axes[0, 0].annotate(f'{idx[:8]}', (row['mean_rank'], row['rank_variance']),
+                                  xytext=(5, 5), textcoords='offset points', fontsize=6, alpha=0.7,
+                                  bbox=dict(boxstyle='round,pad=0.2', facecolor='lightgreen', alpha=0.4))
+            
+            for idx, row in lowest_5_y.iterrows():
+                if idx not in lowest_5_x.index:  # Avoid duplicate labels
+                    axes[0, 0].annotate(f'{idx[:8]}', (row['mean_rank'], row['rank_variance']),
+                                      xytext=(-25, 5), textcoords='offset points', fontsize=6, alpha=0.7,
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='lightblue', alpha=0.4))
+            
             axes[0, 0].legend()
             
             # Top middle: Distribution of times being top feature
@@ -2883,6 +2898,21 @@ class ImportanceMatrixAnalyzer:
             if len(consistent_important) > 0:
                 axes[1, 0].scatter(consistent_important['mean_rank'], consistent_important['rank_variance'], 
                                  color=COLORS['accent'], s=3, label='Consistently Important', alpha=0.8)
+            
+            # Label lowest 5 in x-axis (best mean rank) and lowest 5 in y-axis (most consistent)
+            lowest_5_x = rank_stats_b_to_a.nsmallest(5, 'mean_rank')
+            lowest_5_y = rank_stats_b_to_a.nsmallest(5, 'rank_variance')
+            
+            for idx, row in lowest_5_x.iterrows():
+                axes[1, 0].annotate(f'{idx[:8]}', (row['mean_rank'], row['rank_variance']),
+                                  xytext=(5, 5), textcoords='offset points', fontsize=6, alpha=0.7,
+                                  bbox=dict(boxstyle='round,pad=0.2', facecolor='lightgreen', alpha=0.4))
+            
+            for idx, row in lowest_5_y.iterrows():
+                if idx not in lowest_5_x.index:  # Avoid duplicate labels
+                    axes[1, 0].annotate(f'{idx[:8]}', (row['mean_rank'], row['rank_variance']),
+                                      xytext=(-25, 5), textcoords='offset points', fontsize=6, alpha=0.7,
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='lightblue', alpha=0.4))
             
             axes[1, 0].legend()
             
@@ -2926,6 +2956,32 @@ class ImportanceMatrixAnalyzer:
                     min_rank = min(mean_ranks_a_to_b.min(), mean_ranks_b_to_a.min())
                     ax.plot([min_rank, max_rank], [min_rank, max_rank], 
                            'k--', alpha=0.3, linewidth=1, label='y=x')
+                    
+                    # Label lowest 5 in x-axis and lowest 5 in y-axis (only for first row to avoid redundancy)
+                    if row_idx == 0:
+                        # Create DataFrame for easier sorting
+                        ranks_df = pd.DataFrame({
+                            'x': mean_ranks_a_to_b.values,
+                            'y': mean_ranks_b_to_a.values,
+                            'feature': shared_features
+                        })
+                        
+                        # Get lowest 5 in x and y
+                        lowest_5_x = ranks_df.nsmallest(5, 'x')
+                        lowest_5_y = ranks_df.nsmallest(5, 'y')
+                        
+                        # Label them
+                        for _, row in lowest_5_x.iterrows():
+                            ax.annotate(f"{row['feature'][:8]}", (row['x'], row['y']),
+                                      xytext=(10, -10), textcoords='offset points', fontsize=6, alpha=0.7,
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='lightcoral', alpha=0.4))
+                        
+                        for _, row in lowest_5_y.iterrows():
+                            # Avoid duplicate labels
+                            if row['feature'] not in lowest_5_x['feature'].values:
+                                ax.annotate(f"{row['feature'][:8]}", (row['x'], row['y']),
+                                          xytext=(-30, 10), textcoords='offset points', fontsize=6, alpha=0.7,
+                                          bbox=dict(boxstyle='round,pad=0.2', facecolor='lightsteelblue', alpha=0.4))
                     
                     # Calculate correlation
                     from scipy.stats import pearsonr, spearmanr
@@ -2975,12 +3031,12 @@ class ImportanceMatrixAnalyzer:
             print("  No importance matrices available")
             return None
         
-        # Determine subplot layout
+        # Determine subplot layout - now only 1 column for box plots
         n_plots = sum([1 for x in [data.importance_a_to_b, data.importance_b_to_a] if x is not None])
         
-        fig, axes = plt.subplots(n_plots, 2, figsize=(10, 5*n_plots))
+        fig, axes = plt.subplots(n_plots, 1, figsize=(8, 5*n_plots))
         if n_plots == 1:
-            axes = axes.reshape(1, -1)
+            axes = [axes]
         
         plot_idx = 0
         
@@ -2989,68 +3045,11 @@ class ImportanceMatrixAnalyzer:
             ranks = data.rank_consistency_a_to_b['ranks']
             rank_stats = data.rank_consistency_a_to_b['rank_stats']
             
-            # Left: Clustered rank distribution heatmap for ALL features
-            # Matrix interpretation:
-            # - Rows = input features, Columns = output features  
-            # - Value at [i,j] = rank of input feature i for predicting output feature j
-            # - Rank 1 = most important input for that output, Rank n = least important
-            # - For each column (output feature), all input features are ranked 1 to n
-            
-            try:
-                # Cluster rows (input features) by their rank patterns across output features
-                row_distances = pdist(ranks.values, metric='euclidean')
-                row_linkage = linkage(row_distances, method='ward')
-                row_order = leaves_list(row_linkage)
-                
-                # Cluster columns (output features) by their rank patterns across input features  
-                col_distances = pdist(ranks.T.values, metric='euclidean')
-                col_linkage = linkage(col_distances, method='ward')
-                col_order = leaves_list(col_linkage)
-                
-                # Reorder matrix - keep all features but cluster them
-                clustered_ranks = ranks.iloc[row_order, col_order]
-                
-                # Limit display for readability if too many features
-                if clustered_ranks.shape[0] > 100:
-                    # Show top 100 most variable features for visualization
-                    most_variable_indices = rank_stats.nlargest(100, 'rank_variance').index
-                    clustered_ranks_subset = clustered_ranks.loc[most_variable_indices]
-                    display_title = f'Clustered Rank Patterns (Top 100 Variable of {ranks.shape[0]} features)'
-                else:
-                    clustered_ranks_subset = clustered_ranks
-                    display_title = f'Clustered Rank Patterns (All {ranks.shape[0]} features)'
-                
-                # Create clustered heatmap
-                sns.heatmap(clustered_ranks_subset, ax=axes[plot_idx, 0], cmap='viridis_r', 
-                           cbar_kws={'label': 'Rank (1=most important)'},
-                           xticklabels=False, yticklabels=False)
-                axes[plot_idx, 0].set_title(f'{data.platform_a_name} → {data.platform_b_name}: {display_title}')
-                axes[plot_idx, 0].set_xlabel('Output Features (clustered)')
-                axes[plot_idx, 0].set_ylabel('Input Features (clustered by rank pattern)')
-                
-            except Exception as e:
-                print(f"    Clustering failed, using original order: {e}")
-                # Fallback to original order with subset for readability
-                if ranks.shape[0] > 50:
-                    most_variable = rank_stats.nlargest(50, 'rank_variance')
-                    display_ranks = ranks.loc[most_variable.index]
-                    display_title = f'Rank Patterns (Top 50 Variable of {ranks.shape[0]} features)'
-                else:
-                    display_ranks = ranks
-                    display_title = f'Rank Patterns (All {ranks.shape[0]} features)'
-                    
-                sns.heatmap(display_ranks, ax=axes[plot_idx, 0], cmap='viridis_r', 
-                           cbar_kws={'label': 'Rank (1=most important)'},
-                           xticklabels=False, yticklabels=False)
-                axes[plot_idx, 0].set_title(f'{data.platform_a_name} → {data.platform_b_name}: {display_title}')
-                axes[plot_idx, 0].set_xlabel('Output Features')
-                axes[plot_idx, 0].set_ylabel('Input Features')
-            
-            # Right: Box plot of rank distributions for top features
+            # Box plot of rank distributions for top features
             top_features = rank_stats.nsmallest(10, 'mean_rank').index
             rank_data_for_plot = [ranks.loc[feature].values for feature in top_features]
             
-            bp = axes[plot_idx, 1].boxplot(rank_data_for_plot, labels=[f[:15] + '...' if len(f) > 15 else f 
+            bp = axes[plot_idx].boxplot(rank_data_for_plot, labels=[f[:15] + '...' if len(f) > 15 else f 
                                                                       for f in top_features], 
                                           patch_artist=True)
             
@@ -3059,11 +3058,28 @@ class ImportanceMatrixAnalyzer:
                 patch.set_facecolor(COLORS['primary'])
                 patch.set_alpha(0.7)
             
-            axes[plot_idx, 1].set_title(f'{data.platform_a_name} → {data.platform_b_name}: '
+            # Add black lines for medians (make them more prominent)
+            for median in bp['medians']:
+                median.set_color('black')
+                median.set_linewidth(2)
+            
+            # Add mean lines (optional - as black dotted lines)
+            for i, feature in enumerate(top_features):
+                mean_val = ranks.loc[feature].mean()
+                axes[plot_idx].plot([i+0.75, i+1.25], [mean_val, mean_val], 
+                                      'k--', linewidth=1.5, alpha=0.8)
+            
+            axes[plot_idx].set_title(f'{data.platform_a_name} → {data.platform_b_name}: '
                                        f'Rank Distributions (Top 10 Features)')
-            axes[plot_idx, 1].set_xlabel('Input Features')
-            axes[plot_idx, 1].set_ylabel('Rank Distribution')
-            axes[plot_idx, 1].tick_params(axis='x', rotation=45)
+            axes[plot_idx].set_xlabel('Input Features')
+            axes[plot_idx].set_ylabel('Rank Distribution')
+            axes[plot_idx].tick_params(axis='x', rotation=45)
+            
+            # Add legend for median and mean
+            from matplotlib.lines import Line2D
+            legend_elements = [Line2D([0], [0], color='black', linewidth=2, label='Median'),
+                              Line2D([0], [0], color='black', linewidth=1.5, linestyle='--', label='Mean')]
+            axes[plot_idx].legend(handles=legend_elements, loc='upper right', fontsize=9)
             
             plot_idx += 1
         
@@ -3072,68 +3088,11 @@ class ImportanceMatrixAnalyzer:
             ranks = data.rank_consistency_b_to_a['ranks']
             rank_stats = data.rank_consistency_b_to_a['rank_stats']
             
-            # Left: Clustered rank distribution heatmap for ALL features
-            # Matrix interpretation:
-            # - Rows = input features, Columns = output features  
-            # - Value at [i,j] = rank of input feature i for predicting output feature j
-            # - Rank 1 = most important input for that output, Rank n = least important
-            # - For each column (output feature), all input features are ranked 1 to n
-            
-            try:
-                # Cluster rows (input features) by their rank patterns across output features
-                row_distances = pdist(ranks.values, metric='euclidean')
-                row_linkage = linkage(row_distances, method='ward')
-                row_order = leaves_list(row_linkage)
-                
-                # Cluster columns (output features) by their rank patterns across input features  
-                col_distances = pdist(ranks.T.values, metric='euclidean')
-                col_linkage = linkage(col_distances, method='ward')
-                col_order = leaves_list(col_linkage)
-                
-                # Reorder matrix - keep all features but cluster them
-                clustered_ranks = ranks.iloc[row_order, col_order]
-                
-                # Limit display for readability if too many features
-                if clustered_ranks.shape[0] > 100:
-                    # Show top 100 most variable features for visualization
-                    most_variable_indices = rank_stats.nlargest(100, 'rank_variance').index
-                    clustered_ranks_subset = clustered_ranks.loc[most_variable_indices]
-                    display_title = f'Clustered Rank Patterns (Top 100 Variable of {ranks.shape[0]} features)'
-                else:
-                    clustered_ranks_subset = clustered_ranks
-                    display_title = f'Clustered Rank Patterns (All {ranks.shape[0]} features)'
-                
-                # Create clustered heatmap
-                sns.heatmap(clustered_ranks_subset, ax=axes[plot_idx, 0], cmap='viridis_r', 
-                           cbar_kws={'label': 'Rank (1=most important)'},
-                           xticklabels=False, yticklabels=False)
-                axes[plot_idx, 0].set_title(f'{data.platform_b_name} → {data.platform_a_name}: {display_title}')
-                axes[plot_idx, 0].set_xlabel('Output Features (clustered)')
-                axes[plot_idx, 0].set_ylabel('Input Features (clustered by rank pattern)')
-                
-            except Exception as e:
-                print(f"    Clustering failed, using original order: {e}")
-                # Fallback to original order with subset for readability
-                if ranks.shape[0] > 50:
-                    most_variable = rank_stats.nlargest(50, 'rank_variance')
-                    display_ranks = ranks.loc[most_variable.index]
-                    display_title = f'Rank Patterns (Top 50 Variable of {ranks.shape[0]} features)'
-                else:
-                    display_ranks = ranks
-                    display_title = f'Rank Patterns (All {ranks.shape[0]} features)'
-                    
-                sns.heatmap(display_ranks, ax=axes[plot_idx, 0], cmap='viridis_r', 
-                           cbar_kws={'label': 'Rank (1=most important)'},
-                           xticklabels=False, yticklabels=False)
-                axes[plot_idx, 0].set_title(f'{data.platform_b_name} → {data.platform_a_name}: {display_title}')
-                axes[plot_idx, 0].set_xlabel('Output Features')
-                axes[plot_idx, 0].set_ylabel('Input Features')
-            
-            # Right: Box plot of rank distributions for top features
+            # Box plot of rank distributions for top features
             top_features = rank_stats.nsmallest(10, 'mean_rank').index
             rank_data_for_plot = [ranks.loc[feature].values for feature in top_features]
             
-            bp = axes[plot_idx, 1].boxplot(rank_data_for_plot, labels=[f[:15] + '...' if len(f) > 15 else f 
+            bp = axes[plot_idx].boxplot(rank_data_for_plot, labels=[f[:15] + '...' if len(f) > 15 else f 
                                                                       for f in top_features], 
                                           patch_artist=True)
             
@@ -3142,11 +3101,28 @@ class ImportanceMatrixAnalyzer:
                 patch.set_facecolor(COLORS['secondary'])
                 patch.set_alpha(0.7)
             
-            axes[plot_idx, 1].set_title(f'{data.platform_b_name} → {data.platform_a_name}: '
+            # Add black lines for medians (make them more prominent)
+            for median in bp['medians']:
+                median.set_color('black')
+                median.set_linewidth(2)
+            
+            # Add mean lines (optional - as black dotted lines)
+            for i, feature in enumerate(top_features):
+                mean_val = ranks.loc[feature].mean()
+                axes[plot_idx].plot([i+0.75, i+1.25], [mean_val, mean_val], 
+                                      'k--', linewidth=1.5, alpha=0.8)
+            
+            axes[plot_idx].set_title(f'{data.platform_b_name} → {data.platform_a_name}: '
                                        f'Rank Distributions (Top 10 Features)')
-            axes[plot_idx, 1].set_xlabel('Input Features')
-            axes[plot_idx, 1].set_ylabel('Rank Distribution')
-            axes[plot_idx, 1].tick_params(axis='x', rotation=45)
+            axes[plot_idx].set_xlabel('Input Features')
+            axes[plot_idx].set_ylabel('Rank Distribution')
+            axes[plot_idx].tick_params(axis='x', rotation=45)
+            
+            # Add legend for median and mean
+            from matplotlib.lines import Line2D
+            legend_elements = [Line2D([0], [0], color='black', linewidth=2, label='Median'),
+                              Line2D([0], [0], color='black', linewidth=1.5, linestyle='--', label='Mean')]
+            axes[plot_idx].legend(handles=legend_elements, loc='upper right', fontsize=9)
         
         plt.tight_layout()
         return self.save_figure(fig, "rank_distribution_analysis")
@@ -3248,6 +3224,30 @@ class ImportanceMatrixAnalyzer:
             overlapping_subset = data.overlapping_features
             print(f"  Using all {len(data.overlapping_features)} overlapping features")
         
+        # For top 100 most important features, we need to rank features by mean importance
+        # and select top 100 from overlapping features
+        top_100_features = []
+        if data.importance_a_to_b is not None or data.importance_b_to_a is not None:
+            # Calculate mean importance for each overlapping feature
+            feature_importance_scores = {}
+            
+            for feature in data.overlapping_features:
+                scores = []
+                # Check A→B importance (as input feature)
+                if data.importance_a_to_b is not None and feature in data.importance_a_to_b.index:
+                    scores.append(data.importance_a_to_b.loc[feature].mean())
+                # Check B→A importance (as input feature)
+                if data.importance_b_to_a is not None and feature in data.importance_b_to_a.index:
+                    scores.append(data.importance_b_to_a.loc[feature].mean())
+                
+                if scores:
+                    feature_importance_scores[feature] = np.mean(scores)
+            
+            # Sort features by importance and take top 100
+            sorted_features = sorted(feature_importance_scores.items(), key=lambda x: x[1], reverse=True)
+            top_100_features = [f[0] for f in sorted_features[:100]]
+            print(f"  Selected top {len(top_100_features)} most important overlapping features")
+        
         # Calculate number of plots
         n_plots = 0
         if data.importance_a_to_b is not None:
@@ -3258,13 +3258,12 @@ class ImportanceMatrixAnalyzer:
         if n_plots == 0:
             return None
         
-        fig, axes = plt.subplots(1, n_plots, figsize=(5*n_plots, 5))
+        # Create 2x2 subplot grid: top row for random subset, bottom row for top 100
+        fig, axes = plt.subplots(2, n_plots, figsize=(5*n_plots, 10))
         if n_plots == 1:
-            axes = [axes]
+            axes = axes.reshape(2, 1)
         
-        plot_idx = 0
-        
-        def plot_matched_matrix(importance_matrix, overlapping_features, ax, title):
+        def plot_matched_matrix(importance_matrix, overlapping_features, ax, title, subtitle=""):
             """Plot importance matrix with matched input/output features"""
             # Filter for overlapping features that exist in both input and output
             available_input = [f for f in overlapping_features if f in importance_matrix.index]
@@ -3308,23 +3307,39 @@ class ImportanceMatrixAnalyzer:
                 # for i in range(len(matched_input)):
                 #     ax.add_patch(plt.Rectangle((i-0.5, i-0.5), 1, 1, 
                 #                              fill=False, edgecolor=COLORS['primary'], lw=0.5))
-                ax.set_title(f'{title}\nMatched Features Analysis ({len(matched_input)} features)')
+                full_title = f'{title}\n{subtitle}\nMatched Features ({len(matched_input)} features)'
             else:
-                ax.set_title(f'{title}\nOverlapping Features Analysis\n({len(matched_input)} input × {len(matched_output)} output)')
+                full_title = f'{title}\n{subtitle}\n({len(matched_input)} input × {len(matched_output)} output)'
             
+            ax.set_title(full_title)
             ax.set_xlabel('Output Features')
             ax.set_ylabel('Input Features')
         
+        plot_idx = 0
+        
+        # Top row: Random subset (existing functionality)
         # Plot A→B
         if data.importance_a_to_b is not None:
-            plot_matched_matrix(data.importance_a_to_b, overlapping_subset, axes[plot_idx],
-                              f'{data.platform_a_name} → {data.platform_b_name}')
+            plot_matched_matrix(data.importance_a_to_b, overlapping_subset, axes[0, plot_idx],
+                              f'{data.platform_a_name} → {data.platform_b_name}', 
+                              "Random 100 Features")
+            # Bottom row: Top 100 most important features
+            if top_100_features:
+                plot_matched_matrix(data.importance_a_to_b, top_100_features, axes[1, plot_idx],
+                                  f'{data.platform_a_name} → {data.platform_b_name}',
+                                  "Top 100 Most Important Features")
             plot_idx += 1
         
         # Plot B→A
         if data.importance_b_to_a is not None:
-            plot_matched_matrix(data.importance_b_to_a, overlapping_subset, axes[plot_idx],
-                              f'{data.platform_b_name} → {data.platform_a_name}')
+            plot_matched_matrix(data.importance_b_to_a, overlapping_subset, axes[0, plot_idx],
+                              f'{data.platform_b_name} → {data.platform_a_name}',
+                              "Random 100 Features")
+            # Bottom row: Top 100 most important features
+            if top_100_features:
+                plot_matched_matrix(data.importance_b_to_a, top_100_features, axes[1, plot_idx],
+                                  f'{data.platform_b_name} → {data.platform_a_name}',
+                                  "Top 100 Most Important Features")
         
         plt.tight_layout()
         return self.save_figure(fig, "overlapping_features_analysis")
@@ -3665,20 +3680,27 @@ class ImportanceMatrixAnalyzer:
             ax_score.set_ylim(0, 1)  # Set y-axis limits to 0-1 as requested
             ax_score.grid(True, alpha=0.3)
             
-            # Label extreme points for score plot
+            # Label top 5 highest self-importance scores (x-axis)
             if len(features_data) > 0:
-                # Find features with extreme scores or performance
-                worst_score = features_data.loc[features_data['self_importance_score'].idxmin()]
-                best_score = features_data.loc[features_data['self_importance_score'].idxmax()]
+                # Get top 5 features with highest self-importance scores
+                top_5_scores = features_data.nlargest(5, 'self_importance_score')
                 
-                # Label a few extreme points
-                for point, label in [(worst_score, 'Worst Score'), (best_score, 'Best Score')]:
-                    if not point.isna().any():
-                        ax_score.annotate(f"{point['feature'][:8]}\n({label})", 
-                                        (point['self_importance_score'], point['performance_r']),
-                                        xytext=(5, 5), textcoords='offset points', 
-                                        fontsize=8, alpha=0.7,
-                                        bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.5))
+                # Label top 5 highest self-importance scores
+                for i, (idx, row) in enumerate(top_5_scores.iterrows()):
+                    if not row.isna().any():
+                        # Alternate xytext positions to avoid overlap
+                        if i % 2 == 0:
+                            xytext_pos = (10, 10)
+                        else:
+                            xytext_pos = (-40, -15)
+                        
+                        ax_score.annotate(f"{row['feature'][:10]}", 
+                                        (row['self_importance_score'], row['performance_r']),
+                                        xytext=xytext_pos, textcoords='offset points', 
+                                        fontsize=7, alpha=0.9,
+                                        bbox=dict(boxstyle='round,pad=0.2', facecolor='lightgreen', alpha=0.6),
+                                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2', 
+                                                      alpha=0.5, lw=0.5))
             
             col_idx += 1
         
@@ -3750,24 +3772,35 @@ class ImportanceMatrixAnalyzer:
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.85),
                         verticalalignment='top', fontsize=10)
 
-            # Label outliers (extremes)
+            # Label extremes: top 5 highest y-axis (self-importance) and bottom 5 lowest x-axis (raw correlation)
             try:
-                rows_to_label = [
-                    features_data.loc[x.idxmax()],
-                    features_data.loc[x.idxmin()],
-                    features_data.loc[y.idxmax()],
-                    features_data.loc[y.idxmin()],
-                ]
-                seen = set()
-                for row in rows_to_label:
-                    feat = str(row['feature'])
-                    if feat not in seen and not row.isna().any():
-                        seen.add(feat)
-                        ax.annotate(f"{feat[:12]}", (row['performance_r'], row['self_importance_score']),
-                                    xytext=(6, 6), textcoords='offset points', fontsize=8, alpha=0.85,
-                                    bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.5))
-            except Exception:
-                pass
+                # Sort by self-importance score (y-axis) and get top 5
+                top_5_y = features_data.nlargest(5, 'self_importance_score')
+                # Sort by cross-platform correlation (x-axis) and get bottom 5
+                bottom_5_x = features_data.nsmallest(5, 'performance_r')
+                
+                # Label top 5 highest self-importance scores
+                for idx, row in top_5_y.iterrows():
+                    if not row.isna().any():
+                        ax.annotate(f"{row['feature'][:10]}", 
+                                   (row['performance_r'], row['self_importance_score']),
+                                   xytext=(8, -5), textcoords='offset points', fontsize=7, alpha=0.9,
+                                   bbox=dict(boxstyle='round,pad=0.2', facecolor='lightblue', alpha=0.6),
+                                   arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2', 
+                                                 alpha=0.5, lw=0.5))
+                
+                # Label bottom 5 lowest raw correlations
+                for idx, row in bottom_5_x.iterrows():
+                    # Skip if already labeled in top 5 y
+                    if idx not in top_5_y.index and not row.isna().any():
+                        ax.annotate(f"{row['feature'][:10]}", 
+                                   (row['performance_r'], row['self_importance_score']),
+                                   xytext=(-40, 10), textcoords='offset points', fontsize=7, alpha=0.9,
+                                   bbox=dict(boxstyle='round,pad=0.2', facecolor='lightyellow', alpha=0.6),
+                                   arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=-0.2', 
+                                                 alpha=0.5, lw=0.5))
+            except Exception as e:
+                print(f"  Warning: Could not label extremes: {e}")
 
             ax.set_xlabel('Cross-Platform Raw Correlation (r)')
             ax.set_ylabel('Self-Importance Score (higher = more important)')
@@ -5098,8 +5131,10 @@ class ImportanceMatrixAnalyzer:
             if len(precision_full) > 0 and len(recall_full) > 0:
                 # Plot full PPI curve (excluding the last point which is threshold=0)
                 n_thresh = len(thresholds)
+                # Use consistent colors: primary (red) for A→B, secondary (blue) for B→A
+                curve_color = COLORS['primary'] if 'A_to_B' in direction_key else COLORS['secondary']
                 ax.plot(recall_full[:n_thresh], precision_full[:n_thresh], 
-                       'o-', color='steelblue', linewidth=2.5, markersize=6,
+                       'o-', color=curve_color, linewidth=2.5, markersize=6,
                        alpha=0.8, label='Full PPI')
                 
                 # Calculate and store AUPRC for full PPI
@@ -5120,11 +5155,13 @@ class ImportanceMatrixAnalyzer:
                 random_auprc_full = 0.0
             
             if len(precision_physical) > 0 and len(recall_physical) > 0:
-                # Plot physical PPI curve
+                # Plot physical PPI curve with darker version of same color
                 n_thresh = len(thresholds)
+                # Use a darker/lighter variant of the same color for physical vs full PPI
+                physical_color = curve_color  # Use same color but with different line style
                 ax.plot(recall_physical[:n_thresh], precision_physical[:n_thresh], 
-                       's--', color='darkorange', linewidth=2.5, markersize=5,
-                       alpha=0.7, label='Physical PPI')
+                       's--', color=physical_color, linewidth=2.5, markersize=5,
+                       alpha=0.5, label='Physical PPI')
                 
                 # Calculate and store AUPRC for physical PPI
                 auprc_physical = self._calculate_auprc(recall_physical, precision_physical)
@@ -5660,11 +5697,23 @@ class ImportanceMatrixAnalyzer:
             if edge_data.get('physical', 0) == 1:
                 physical_ppi.add_edge(u, v)
         
+        # Find common features that exist in both importance matrices (as input features)
+        # This ensures fair comparison between platforms
+        common_features = None
+        if has_a_to_b and has_b_to_a:
+            features_a = set(data.importance_a_to_b.index)
+            features_b = set(data.importance_b_to_a.index)
+            common_features = list(features_a & features_b)
+            print(f"  Using {len(common_features)} common features for fair comparison")
+        
         # Prepare data for each direction
         importance_data = []
         
         if has_a_to_b:
             mean_importance_a_to_b = data.importance_a_to_b.mean(axis=1)
+            # If common features exist, filter to only those
+            if common_features:
+                mean_importance_a_to_b = mean_importance_a_to_b[mean_importance_a_to_b.index.isin(common_features)]
             importance_data.append({
                 'direction': f"{data.platform_a_name} → {data.platform_b_name}",
                 'mean_importance': mean_importance_a_to_b,
@@ -5673,6 +5722,9 @@ class ImportanceMatrixAnalyzer:
         
         if has_b_to_a:
             mean_importance_b_to_a = data.importance_b_to_a.mean(axis=1)
+            # If common features exist, filter to only those
+            if common_features:
+                mean_importance_b_to_a = mean_importance_b_to_a[mean_importance_b_to_a.index.isin(common_features)]
             importance_data.append({
                 'direction': f"{data.platform_b_name} → {data.platform_a_name}",
                 'mean_importance': mean_importance_b_to_a,
@@ -5739,12 +5791,24 @@ class ImportanceMatrixAnalyzer:
                 cumulative_edge_density_ppi.append(density_ppi)
                 cumulative_edge_density_physical.append(density_physical)
             
-            # Calculate baseline density (overall)
+            # Calculate baseline density (overall) - using only edges between features in our list
             total_possible = n_features * (n_features - 1) // 2
-            total_edges_ppi = len(ppi_edges_set)
-            total_edges_physical = len(physical_edges_set)
-            baseline_density_ppi = (total_edges_ppi / total_possible * 100) if total_possible > 0 else 0
-            baseline_density_physical = (total_edges_physical / total_possible * 100) if total_possible > 0 else 0
+            
+            # Count only PPI edges that involve features in our feature list
+            feature_set = set(feature_names)
+            relevant_ppi_edges = 0
+            relevant_physical_edges = 0
+            
+            for u, v in data.ppi_reference.edges():
+                if u in feature_set and v in feature_set:
+                    edge = tuple(sorted([u, v]))
+                    if edge in ppi_edges_set:
+                        relevant_ppi_edges += 1
+                    if edge in physical_edges_set:
+                        relevant_physical_edges += 1
+            
+            baseline_density_ppi = (relevant_ppi_edges / total_possible * 100) if total_possible > 0 else 0
+            baseline_density_physical = (relevant_physical_edges / total_possible * 100) if total_possible > 0 else 0
             
             # Subsample for plotting if too many features
             ranks = np.arange(1, n_features + 1)
@@ -5982,7 +6046,8 @@ class ImportanceMatrixAnalyzer:
             direction = data_dict['direction']
             importance_matrix = data_dict['importance_matrix']  # This is still a DataFrame
             overlapping_features = data_dict['overlapping_features']
-            color = 'steelblue' if col_idx == 0 else 'darkorange'
+            # Use consistent colors: primary (red) for A→B, secondary (blue) for B→A
+            color = COLORS['primary'] if col_idx == 0 else COLORS['secondary']
             
             print(f"  Processing {direction}...")
             print(f"    Overlapping features: {len(overlapping_features)}")
