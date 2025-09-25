@@ -1458,15 +1458,17 @@ class CispQTLAnalyzer:
         return min(max_score, max(0, score))
     
     def plot_pval_slope_comparison(self, data: pQTLData) -> plt.Figure:
-        """Create combined p-value and slope comparison plots using density visualization.
+        """Create combined p-value, slope, and chi-square comparison plots using density visualization.
         
-        Creates a two-row figure with p-value comparisons (top) and slope comparisons (bottom)
-        for each imputation method vs truth. Uses hexbin density plots to better visualize
-        overlapping points. P-value plots include all MAF-filtered hits, while slope plots 
-        include only hits passing both p-value and MAF cutoffs.
+        Creates a three-row figure with p-value comparisons (top), slope comparisons (middle),
+        and chi-square comparisons (bottom) for each imputation method vs truth. Uses hexbin 
+        density plots to better visualize overlapping points. P-value plots include all MAF-filtered 
+        hits, while slope and chi-square plots include only hits passing both p-value and MAF cutoffs.
         
         The red dashed lines in p-value plots indicate the significance threshold (p=0.05),
         dividing the plot into quadrants for true/false positives and negatives.
+        
+        Chi-square values are calculated as (slope/slope_se)², representing the squared test statistic.
         
         Args:
             data: pQTLData object containing analysis results
@@ -1474,7 +1476,7 @@ class CispQTLAnalyzer:
         Returns:
             matplotlib Figure object with comparison plots
         """
-        print("Creating p-value and slope comparison plots...")
+        print("Creating p-value, slope, and chi-square comparison plots...")
         
         # Check if we have the necessary data
         if not data.maf_filtered:
@@ -1491,9 +1493,9 @@ class CispQTLAnalyzer:
         method_colors = [NATURE_COLORS['secondary'], NATURE_COLORS['accent'], 
                         NATURE_COLORS['neutral'], NATURE_COLORS['highlight']]
         
-        # Create figure with 2 rows x 4 columns
-        fig = plt.figure(figsize=(20, 10))
-        gs = GridSpec(2, 4, figure=fig, hspace=0.3, wspace=0.25)
+        # Create figure with 3 rows x 4 columns
+        fig = plt.figure(figsize=(20, 15))
+        gs = GridSpec(3, 4, figure=fig, hspace=0.3, wspace=0.25)
         
         # Prepare truth data with assoc_id (once, outside the loop)
         truth_maf = data.maf_filtered['truth'].copy()
@@ -1640,9 +1642,113 @@ class CispQTLAnalyzer:
                 # No effect size analysis available for this method
                 ax2.text(0.5, 0.5, f'No effect size data available\nfor {method_name}', 
                        ha='center', va='center', transform=ax2.transAxes)
+            
+            # Panel 3: Chi-square comparison (using MAF-filtered data like p-value panel)
+            ax3 = fig.add_subplot(gs[2, i])
+            
+            # For chi-square, use MAF-filtered data (same as p-value panel in row 1)
+            if method in data.maf_filtered and 'truth' in data.maf_filtered:
+                # Get MAF-filtered data with slope and slope_se
+                truth_chi2_data = data.maf_filtered['truth'].copy()
+                method_chi2_data = data.maf_filtered[method].copy()
+                
+                # Filter for valid slope_se values and remove invalid p-values
+                truth_chi2_data = truth_chi2_data[(truth_chi2_data['slope_se'] > 0) & 
+                                                   truth_chi2_data['slope_se'].notna() &
+                                                   (truth_chi2_data['pval_nominal'] < 1)]
+                method_chi2_data = method_chi2_data[(method_chi2_data['slope_se'] > 0) & 
+                                                     method_chi2_data['slope_se'].notna() &
+                                                     (method_chi2_data['pval_nominal'] < 1)]
+                
+                if len(truth_chi2_data) > 0 and len(method_chi2_data) > 0:
+                    # Calculate chi-square values
+                    truth_chi2_data['chi2'] = (truth_chi2_data['slope'] / truth_chi2_data['slope_se']) ** 2
+                    method_chi2_data['chi2'] = (method_chi2_data['slope'] / method_chi2_data['slope_se']) ** 2
+                    
+                    # Add assoc_id for merging
+                    truth_chi2_data['assoc_id'] = truth_chi2_data['phenotype_id'] + ':' + truth_chi2_data['variant_id']
+                    method_chi2_data['assoc_id'] = method_chi2_data['phenotype_id'] + ':' + method_chi2_data['variant_id']
+                    
+                    # Merge to get common associations
+                    merged_chi2 = pd.merge(
+                        truth_chi2_data[['assoc_id', 'chi2']],
+                        method_chi2_data[['assoc_id', 'chi2']],
+                        on='assoc_id',
+                        suffixes=('_truth', '_method')
+                    )
+                    
+                    if len(merged_chi2) > 0:
+                        truth_chi2 = merged_chi2['chi2_truth'].values
+                        method_chi2 = merged_chi2['chi2_method'].values
+                        
+                        # Remove inf and nan values
+                        valid_mask = np.isfinite(truth_chi2) & np.isfinite(method_chi2)
+                        truth_chi2_clean = truth_chi2[valid_mask]
+                        method_chi2_clean = method_chi2[valid_mask]
+                        
+                        if len(truth_chi2_clean) > 0:
+                            # Calculate statistics
+                            pearson_r, _ = pearsonr(truth_chi2_clean, method_chi2_clean)
+                            spearman_r, _ = spearmanr(truth_chi2_clean, method_chi2_clean)
+                            mae = np.mean(np.abs(truth_chi2_clean - method_chi2_clean))
+                            
+                            # Create hexbin density plot
+                            min_val = min(np.min(truth_chi2_clean), np.min(method_chi2_clean))
+                            max_val = max(np.max(truth_chi2_clean), np.max(method_chi2_clean))
+                            
+                            hb3 = ax3.hexbin(truth_chi2_clean, method_chi2_clean,
+                                           gridsize=40, cmap='Greens', mincnt=1,
+                                           norm=LogNorm(), edgecolors='none', linewidths=0,
+                                           extent=[min_val, max_val, min_val, max_val])
+                            
+                            # Add colorbar
+                            cb3 = plt.colorbar(hb3, ax=ax3)
+                            cb3.set_label('Count (log scale)', fontsize=8)
+                            
+                            # Add diagonal reference line
+                            ax3.plot([min_val, max_val], [min_val, max_val],
+                                   'k--', alpha=0.5, linewidth=1.5, label='Perfect concordance')
+                            
+                            # Add regression line
+                            if len(truth_chi2_clean) > 1:
+                                z = np.polyfit(truth_chi2_clean, method_chi2_clean, 1)
+                                p = np.poly1d(z)
+                                x_line = np.linspace(np.min(truth_chi2_clean), np.max(truth_chi2_clean), 100)
+                                ax3.plot(x_line, p(x_line), color='red', linewidth=1.5,
+                                       alpha=0.8, label='Regression line')
+                            
+                            # Labels and title
+                            ax3.set_xlabel('Truth Chi-square')
+                            ax3.set_ylabel(f'{method_name} Chi-square')
+                            ax3.set_title(f'{method_name}\nChi-square Comparison (MAF-filtered)')
+                            
+                            # Add statistics text
+                            stats_text = f'n = {len(truth_chi2_clean)}\n'
+                            stats_text += f'Pearson r = {pearson_r:.3f}\n'
+                            stats_text += f'Spearman ρ = {spearman_r:.3f}\n'
+                            stats_text += f'MAE = {mae:.3f}'
+                            
+                            ax3.text(0.05, 0.95, stats_text,
+                                   transform=ax3.transAxes, fontsize=9, verticalalignment='top',
+                                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+                            
+                            ax3.legend(loc='lower right', fontsize=9)
+                            ax3.grid(True, alpha=0.3)
+                        else:
+                            ax3.text(0.5, 0.5, f'No valid chi-square values\nafter filtering',
+                                   ha='center', va='center', transform=ax3.transAxes)
+                    else:
+                        ax3.text(0.5, 0.5, f'No common associations\nfor chi-square comparison',
+                               ha='center', va='center', transform=ax3.transAxes)
+                else:
+                    ax3.text(0.5, 0.5, f'Insufficient data\nfor chi-square calculation',
+                           ha='center', va='center', transform=ax3.transAxes)
+            else:
+                ax3.text(0.5, 0.5, f'No MAF-filtered data available\nfor {method_name}',
+                       ha='center', va='center', transform=ax3.transAxes)
         
         # Add main title
-        fig.suptitle('P-value and Effect Size Comparison: Imputed vs Truth', 
+        fig.suptitle('P-value, Effect Size, and Chi-square Comparison: Imputed vs Truth', 
                     fontsize=16, fontweight='bold', y=1.02)
         
         plt.tight_layout()

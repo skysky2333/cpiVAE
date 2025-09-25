@@ -133,7 +133,59 @@ class ComparativeAnalyzer:
         self.network_analyzer = None
         if NETWORK_ANALYSIS_AVAILABLE:
             self.network_analyzer = NetworkAnalyzer(output_dir=str(self.output_dir))
-        
+
+    def _add_pvalue_textbox(self, ax, p_values: Dict[str, float], position: str = 'upper right'):
+        """Add textbox with exact p-values to plot.
+
+        Args:
+            ax: Matplotlib axis to add textbox to
+            p_values: Dictionary mapping test names to p-values
+            position: Position of textbox ('upper right', 'upper left', 'lower right', 'lower left')
+        """
+        if not p_values:
+            return
+
+        # Format p-values
+        text_lines = []
+        for name, p_val in p_values.items():
+            if p_val < 0.001:
+                # Use scientific notation for very small p-values
+                formatted_p = f"{name}: p = {p_val:.2e}"
+            elif p_val < 0.01:
+                formatted_p = f"{name}: p = {p_val:.4f}"
+            elif p_val < 0.05:
+                formatted_p = f"{name}: p = {p_val:.3f}"
+            else:
+                formatted_p = f"{name}: p = {p_val:.2f}"
+            text_lines.append(formatted_p)
+
+        text_content = '\n'.join(text_lines)
+
+        # Determine position based on string
+        position_dict = {
+            'upper right': (0.98, 0.98),
+            'upper left': (0.02, 0.98),
+            'lower right': (0.98, 0.02),
+            'lower left': (0.02, 0.02),
+            'upper center': (0.5, 0.98),
+            'lower center': (0.5, 0.02)
+        }
+        x_pos, y_pos = position_dict.get(position, (0.98, 0.98))
+
+        # Determine alignment based on position
+        ha = 'right' if 'right' in position else ('left' if 'left' in position else 'center')
+        va = 'top' if 'upper' in position else 'bottom'
+
+        # Add textbox
+        ax.text(x_pos, y_pos, text_content,
+                transform=ax.transAxes,
+                fontsize=9,
+                verticalalignment=va,
+                horizontalalignment=ha,
+                bbox=dict(boxstyle='round', facecolor='white', edgecolor='black',
+                         alpha=0.9, linewidth=0.5, pad=0.3),
+                family='monospace')
+
     def _get_git_hash(self) -> str:
         """Get current git commit hash for reproducibility"""
         try:
@@ -2384,19 +2436,47 @@ class ComparativeAnalyzer:
         if mae_results_raw:
             methods = list(mae_results_raw.keys())
             valid_methods = [m for m in methods if len(mae_results_raw[m]) > 0]
-            
+
             if valid_methods:
-                # Calculate mean MAE for each method
+                # Calculate mean MAE and standard error for each method
                 mean_mae = [np.mean(mae_results_raw[m]) for m in valid_methods]
-                
-                # Create bar plot
+                stderr_mae = [np.std(mae_results_raw[m], ddof=1) / np.sqrt(len(mae_results_raw[m]))
+                             if len(mae_results_raw[m]) > 1 else 0 for m in valid_methods]
+
+                # Create bar plot with error bars
                 x_pos = np.arange(len(valid_methods))
-                bars = ax_mae.bar(x_pos, mean_mae, color=[colors[i % len(colors)] for i in range(len(valid_methods))], 
-                                 alpha=0.8, edgecolor='black', linewidth=0.8)
-                
-                # Add significance annotations
+                bars = ax_mae.bar(x_pos, mean_mae, yerr=stderr_mae, capsize=4,
+                                 color=[colors[i % len(colors)] for i in range(len(valid_methods))],
+                                 alpha=0.8, edgecolor='black', linewidth=0.8,
+                                 error_kw={'linewidth': 1.5, 'ecolor': 'black'})
+
+                # Add value labels on top of bars
+                for i, (bar, val, err) in enumerate(zip(bars, mean_mae, stderr_mae)):
+                    height = bar.get_height() + err
+                    ax_mae.text(bar.get_x() + bar.get_width()/2., height + max(mean_mae) * 0.02,
+                               f'{val:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+                # Add significance annotations with p-values
+                p_values_mae = {}
                 add_significance_annotations(ax_mae, {m: mae_results_raw[m] for m in valid_methods}, mean_mae)
-                
+
+                # Collect p-values for textbox
+                if len(valid_methods) >= 2:
+                    from itertools import combinations
+                    for m1, m2 in combinations(valid_methods, 2):
+                        data1, data2 = mae_results_raw[m1], mae_results_raw[m2]
+                        if len(data1) > 0 and len(data2) > 0:
+                            try:
+                                _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                            except:
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                            p_values_mae[f"{m1[:8]} vs {m2[:8]}"] = p_val
+
+                    # Add p-value textbox
+                    if p_values_mae:
+                        self._add_pvalue_textbox(ax_mae, p_values_mae, position='upper left')
+
                 ax_mae.set_xlabel('Method')
                 ax_mae.set_ylabel('Mean Absolute Error')
                 ax_mae.set_title('MAE of Odds Ratios vs Truth (FDR<0.05)', fontweight='bold')
@@ -2414,19 +2494,47 @@ class ComparativeAnalyzer:
         if corr_results_raw:
             methods_c = list(corr_results_raw.keys())
             valid_methods_c = [m for m in methods_c if len(corr_results_raw[m]) > 0]
-            
+
             if valid_methods_c:
-                # Calculate mean correlation for each method
+                # Calculate mean correlation and standard error for each method
                 mean_corr = [np.mean(corr_results_raw[m]) for m in valid_methods_c]
-                
-                # Create bar plot
+                stderr_corr = [np.std(corr_results_raw[m], ddof=1) / np.sqrt(len(corr_results_raw[m]))
+                              if len(corr_results_raw[m]) > 1 else 0 for m in valid_methods_c]
+
+                # Create bar plot with error bars
                 x_pos_c = np.arange(len(valid_methods_c))
-                bars_c = ax_corr.bar(x_pos_c, mean_corr, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
-                                    alpha=0.8, edgecolor='black', linewidth=0.8)
-                
+                bars_c = ax_corr.bar(x_pos_c, mean_corr, yerr=stderr_corr, capsize=4,
+                                    color=[colors[i % len(colors)] for i in range(len(valid_methods_c))],
+                                    alpha=0.8, edgecolor='black', linewidth=0.8,
+                                    error_kw={'linewidth': 1.5, 'ecolor': 'black'})
+
+                # Add value labels on top of bars
+                for i, (bar, val, err) in enumerate(zip(bars_c, mean_corr, stderr_corr)):
+                    height = bar.get_height() + err
+                    ax_corr.text(bar.get_x() + bar.get_width()/2., height + max(mean_corr) * 0.02,
+                                f'{val:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
                 # Add significance annotations
+                p_values_corr = {}
                 add_significance_annotations(ax_corr, {m: corr_results_raw[m] for m in valid_methods_c}, mean_corr)
-                
+
+                # Collect p-values for textbox
+                if len(valid_methods_c) >= 2:
+                    from itertools import combinations
+                    for m1, m2 in combinations(valid_methods_c, 2):
+                        data1, data2 = corr_results_raw[m1], corr_results_raw[m2]
+                        if len(data1) > 0 and len(data2) > 0:
+                            try:
+                                _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                            except:
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                            p_values_corr[f"{m1[:8]} vs {m2[:8]}"] = p_val
+
+                    # Add p-value textbox
+                    if p_values_corr:
+                        self._add_pvalue_textbox(ax_corr, p_values_corr, position='upper left')
+
                 ax_corr.set_xlabel('Method')
                 ax_corr.set_ylabel('Correlation (r)')
                 ax_corr.set_title('Correlation vs Truth (FDR<0.05)', fontweight='bold')
@@ -2444,19 +2552,47 @@ class ComparativeAnalyzer:
         if r2_results_raw:
             methods_r2 = list(r2_results_raw.keys())
             valid_methods_r2 = [m for m in methods_r2 if len(r2_results_raw[m]) > 0]
-            
+
             if valid_methods_r2:
-                # Calculate mean R-squared for each method
+                # Calculate mean R-squared and standard error for each method
                 mean_r2 = [np.mean(r2_results_raw[m]) for m in valid_methods_r2]
-                
-                # Create bar plot
+                stderr_r2 = [np.std(r2_results_raw[m], ddof=1) / np.sqrt(len(r2_results_raw[m]))
+                            if len(r2_results_raw[m]) > 1 else 0 for m in valid_methods_r2]
+
+                # Create bar plot with error bars
                 x_pos_r2 = np.arange(len(valid_methods_r2))
-                bars_r2 = ax_r2.bar(x_pos_r2, mean_r2, color=[colors[i % len(colors)] for i in range(len(valid_methods_r2))], 
-                                   alpha=0.8, edgecolor='black', linewidth=0.8)
-                
+                bars_r2 = ax_r2.bar(x_pos_r2, mean_r2, yerr=stderr_r2, capsize=4,
+                                   color=[colors[i % len(colors)] for i in range(len(valid_methods_r2))],
+                                   alpha=0.8, edgecolor='black', linewidth=0.8,
+                                   error_kw={'linewidth': 1.5, 'ecolor': 'black'})
+
+                # Add value labels on top of bars
+                for i, (bar, val, err) in enumerate(zip(bars_r2, mean_r2, stderr_r2)):
+                    height = bar.get_height() + err
+                    ax_r2.text(bar.get_x() + bar.get_width()/2., height + max(mean_r2) * 0.02,
+                              f'{val:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
                 # Add significance annotations
+                p_values_r2 = {}
                 add_significance_annotations(ax_r2, {m: r2_results_raw[m] for m in valid_methods_r2}, mean_r2)
-                
+
+                # Collect p-values for textbox
+                if len(valid_methods_r2) >= 2:
+                    from itertools import combinations
+                    for m1, m2 in combinations(valid_methods_r2, 2):
+                        data1, data2 = r2_results_raw[m1], r2_results_raw[m2]
+                        if len(data1) > 0 and len(data2) > 0:
+                            try:
+                                _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                            except:
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                            p_values_r2[f"{m1[:8]} vs {m2[:8]}"] = p_val
+
+                    # Add p-value textbox
+                    if p_values_r2:
+                        self._add_pvalue_textbox(ax_r2, p_values_r2, position='upper left')
+
                 ax_r2.set_xlabel('Method')
                 ax_r2.set_ylabel('R-squared')
                 ax_r2.set_title('R² vs Truth (FDR<0.05)', fontweight='bold')
@@ -2620,19 +2756,47 @@ class ComparativeAnalyzer:
         if mae_results_raw:
             methods = list(mae_results_raw.keys())
             valid_methods = [m for m in methods if len(mae_results_raw[m]) > 0]
-            
+
             if valid_methods:
-                # Calculate mean MAE for each method
+                # Calculate mean MAE and standard error for each method
                 mean_mae = [np.mean(mae_results_raw[m]) for m in valid_methods]
-                
-                # Create bar plot
+                stderr_mae = [np.std(mae_results_raw[m], ddof=1) / np.sqrt(len(mae_results_raw[m]))
+                             if len(mae_results_raw[m]) > 1 else 0 for m in valid_methods]
+
+                # Create bar plot with error bars
                 x_pos = np.arange(len(valid_methods))
-                bars = ax_mae.bar(x_pos, mean_mae, color=[colors[i % len(colors)] for i in range(len(valid_methods))], 
-                                 alpha=0.8, edgecolor='black', linewidth=0.8)
-                
-                # Add significance annotations
+                bars = ax_mae.bar(x_pos, mean_mae, yerr=stderr_mae, capsize=4,
+                                 color=[colors[i % len(colors)] for i in range(len(valid_methods))],
+                                 alpha=0.8, edgecolor='black', linewidth=0.8,
+                                 error_kw={'linewidth': 1.5, 'ecolor': 'black'})
+
+                # Add value labels on top of bars
+                for i, (bar, val, err) in enumerate(zip(bars, mean_mae, stderr_mae)):
+                    height = bar.get_height() + err
+                    ax_mae.text(bar.get_x() + bar.get_width()/2., height + max(mean_mae) * 0.02,
+                               f'{val:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+                # Add significance annotations with p-values
+                p_values_mae = {}
                 add_significance_annotations(ax_mae, {m: mae_results_raw[m] for m in valid_methods}, mean_mae)
-                
+
+                # Collect p-values for textbox
+                if len(valid_methods) >= 2:
+                    from itertools import combinations
+                    for m1, m2 in combinations(valid_methods, 2):
+                        data1, data2 = mae_results_raw[m1], mae_results_raw[m2]
+                        if len(data1) > 0 and len(data2) > 0:
+                            try:
+                                _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                            except:
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                            p_values_mae[f"{m1[:8]} vs {m2[:8]}"] = p_val
+
+                    # Add p-value textbox
+                    if p_values_mae:
+                        self._add_pvalue_textbox(ax_mae, p_values_mae, position='upper left')
+
                 ax_mae.set_xlabel('Method')
                 ax_mae.set_ylabel('Mean Absolute Error')
                 ax_mae.set_title('MAE of Beta Coefficients vs Truth (FDR<0.05)', fontweight='bold')
@@ -2650,19 +2814,47 @@ class ComparativeAnalyzer:
         if corr_results_raw:
             methods_c = list(corr_results_raw.keys())
             valid_methods_c = [m for m in methods_c if len(corr_results_raw[m]) > 0]
-            
+
             if valid_methods_c:
-                # Calculate mean correlation for each method
+                # Calculate mean correlation and standard error for each method
                 mean_corr = [np.mean(corr_results_raw[m]) for m in valid_methods_c]
-                
-                # Create bar plot
+                stderr_corr = [np.std(corr_results_raw[m], ddof=1) / np.sqrt(len(corr_results_raw[m]))
+                              if len(corr_results_raw[m]) > 1 else 0 for m in valid_methods_c]
+
+                # Create bar plot with error bars
                 x_pos_c = np.arange(len(valid_methods_c))
-                bars_c = ax_corr.bar(x_pos_c, mean_corr, color=[colors[i % len(colors)] for i in range(len(valid_methods_c))], 
-                                    alpha=0.8, edgecolor='black', linewidth=0.8)
-                
+                bars_c = ax_corr.bar(x_pos_c, mean_corr, yerr=stderr_corr, capsize=4,
+                                    color=[colors[i % len(colors)] for i in range(len(valid_methods_c))],
+                                    alpha=0.8, edgecolor='black', linewidth=0.8,
+                                    error_kw={'linewidth': 1.5, 'ecolor': 'black'})
+
+                # Add value labels on top of bars
+                for i, (bar, val, err) in enumerate(zip(bars_c, mean_corr, stderr_corr)):
+                    height = bar.get_height() + err
+                    ax_corr.text(bar.get_x() + bar.get_width()/2., height + max(mean_corr) * 0.02,
+                                f'{val:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
                 # Add significance annotations
+                p_values_corr = {}
                 add_significance_annotations(ax_corr, {m: corr_results_raw[m] for m in valid_methods_c}, mean_corr)
-                
+
+                # Collect p-values for textbox
+                if len(valid_methods_c) >= 2:
+                    from itertools import combinations
+                    for m1, m2 in combinations(valid_methods_c, 2):
+                        data1, data2 = corr_results_raw[m1], corr_results_raw[m2]
+                        if len(data1) > 0 and len(data2) > 0:
+                            try:
+                                _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                            except:
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                            p_values_corr[f"{m1[:8]} vs {m2[:8]}"] = p_val
+
+                    # Add p-value textbox
+                    if p_values_corr:
+                        self._add_pvalue_textbox(ax_corr, p_values_corr, position='upper left')
+
                 ax_corr.set_xlabel('Method')
                 ax_corr.set_ylabel('Correlation (r)')
                 ax_corr.set_title('Correlation vs Truth (FDR<0.05)', fontweight='bold')
@@ -2680,19 +2872,47 @@ class ComparativeAnalyzer:
         if r2_results_raw:
             methods_r2 = list(r2_results_raw.keys())
             valid_methods_r2 = [m for m in methods_r2 if len(r2_results_raw[m]) > 0]
-            
+
             if valid_methods_r2:
-                # Calculate mean R-squared for each method
+                # Calculate mean R-squared and standard error for each method
                 mean_r2 = [np.mean(r2_results_raw[m]) for m in valid_methods_r2]
-                
-                # Create bar plot
+                stderr_r2 = [np.std(r2_results_raw[m], ddof=1) / np.sqrt(len(r2_results_raw[m]))
+                            if len(r2_results_raw[m]) > 1 else 0 for m in valid_methods_r2]
+
+                # Create bar plot with error bars
                 x_pos_r2 = np.arange(len(valid_methods_r2))
-                bars_r2 = ax_r2.bar(x_pos_r2, mean_r2, color=[colors[i % len(colors)] for i in range(len(valid_methods_r2))], 
-                                   alpha=0.8, edgecolor='black', linewidth=0.8)
-                
+                bars_r2 = ax_r2.bar(x_pos_r2, mean_r2, yerr=stderr_r2, capsize=4,
+                                   color=[colors[i % len(colors)] for i in range(len(valid_methods_r2))],
+                                   alpha=0.8, edgecolor='black', linewidth=0.8,
+                                   error_kw={'linewidth': 1.5, 'ecolor': 'black'})
+
+                # Add value labels on top of bars
+                for i, (bar, val, err) in enumerate(zip(bars_r2, mean_r2, stderr_r2)):
+                    height = bar.get_height() + err
+                    ax_r2.text(bar.get_x() + bar.get_width()/2., height + max(mean_r2) * 0.02,
+                              f'{val:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
                 # Add significance annotations
+                p_values_r2 = {}
                 add_significance_annotations(ax_r2, {m: r2_results_raw[m] for m in valid_methods_r2}, mean_r2)
-                
+
+                # Collect p-values for textbox
+                if len(valid_methods_r2) >= 2:
+                    from itertools import combinations
+                    for m1, m2 in combinations(valid_methods_r2, 2):
+                        data1, data2 = r2_results_raw[m1], r2_results_raw[m2]
+                        if len(data1) > 0 and len(data2) > 0:
+                            try:
+                                _, p_val = wilcoxon(data1, data2, alternative='two-sided')
+                            except:
+                                from scipy.stats import mannwhitneyu
+                                _, p_val = mannwhitneyu(data1, data2, alternative='two-sided')
+                            p_values_r2[f"{m1[:8]} vs {m2[:8]}"] = p_val
+
+                    # Add p-value textbox
+                    if p_values_r2:
+                        self._add_pvalue_textbox(ax_r2, p_values_r2, position='upper left')
+
                 ax_r2.set_xlabel('Method')
                 ax_r2.set_ylabel('R-squared')
                 ax_r2.set_title('R² vs Truth (FDR<0.05)', fontweight='bold')
@@ -3234,16 +3454,16 @@ class ComparativeAnalyzer:
         ax3.set_title('Binary Phenotypes: Overall Recovery Rate by Association Count', fontweight='bold', fontsize=14)
         ax3.set_xlabel('Number of Significant Associations in Truth Data (binned)', fontsize=12)
         ax3.set_ylabel('Overall Recovery Rate (%)', fontsize=12)
-        
-        # Define bins for x-axis
-        bins = [0, 10, 20, 30, np.inf]
-        bin_labels = ['1-10', '11-20', '21-30', '30+']
-        
+
+        # Define bins for x-axis - CHANGED TO [1-10, 10-30, 30+]
+        bins = [0, 10, 30, np.inf]
+        bin_labels = ['1-10', '10-30', '30+']
+
         if not binary_df.empty:
             # Bin the data
-            binary_df['bin'] = pd.cut(binary_df['n_truth_sig'], bins=bins, 
+            binary_df['bin'] = pd.cut(binary_df['n_truth_sig'], bins=bins,
                                       labels=bin_labels, include_lowest=True)
-            
+
             # Calculate overall recovery rate per bin per method
             bin_summary = binary_df.groupby(['bin', 'method']).agg({
                 'n_retained': 'sum',  # Total retained hits in imputed data
@@ -3253,15 +3473,19 @@ class ComparativeAnalyzer:
             bin_summary['overall_recovery_rate'] = (bin_summary['n_retained'] / bin_summary['n_truth_sig']) * 100
             # Count total number of associations (not unique phenotypes) in each bin
             bin_summary['n_associations'] = binary_df.groupby(['bin', 'method']).size().values
-            
-            # Plot grouped bars - only imputed methods
+
+            # Plot grouped bars - include Method 3 if available
             all_methods = sorted(binary_df['method'].unique())
-            # Only use first two methods (method1 and method2)
+            # Include method1, method2, and method3 (if available)
             methods_to_plot = [data.method1_name, data.method2_name]
+            if data.method3_name and data.method3_name in all_methods:
+                methods_to_plot.append(data.method3_name)
             methods = [m for m in methods_to_plot if m in all_methods]
-            
+
             x = np.arange(len(bin_labels))
-            width = 0.35  # Width for 2 bars
+            # Adjust width based on number of methods
+            n_methods = len(methods)
+            width = 0.8 / n_methods  # Dynamic width based on number of methods
             
             # Store recovery data for significance testing
             bin_recovery_data = {bin_label: {method: [] for method in methods} for bin_label in bin_labels}
@@ -3274,24 +3498,50 @@ class ComparativeAnalyzer:
                     if not method_phenos.empty:
                         bin_recovery_data[bin_label][method] = method_phenos['retention_rate'].values * 100
             
-            # Plot imputed methods
+            # Calculate mean recovery rates and standard errors for each bin/method
+            recovery_means_by_method = {}
+            recovery_stderrs_by_method = {}
+
+            # Plot imputed methods with error bars
             for i, method in enumerate(methods):
                 method_data = bin_summary[bin_summary['method'] == method]
                 # Ensure all bins are represented
                 recovery_rates = []
+                recovery_stderrs = []
                 n_associations = []
                 for bin_label in bin_labels:
                     bin_data = method_data[method_data['bin'] == bin_label]
                     if not bin_data.empty:
                         recovery_rates.append(bin_data['overall_recovery_rate'].values[0])
                         n_associations.append(bin_data['n_associations'].values[0])
+                        # Calculate standard error for this bin
+                        individual_rates = bin_recovery_data[bin_label][method]
+                        if len(individual_rates) > 1:
+                            stderr = np.std(individual_rates, ddof=1) / np.sqrt(len(individual_rates))
+                            recovery_stderrs.append(stderr)
+                        else:
+                            recovery_stderrs.append(0)
                     else:
                         recovery_rates.append(0)
+                        recovery_stderrs.append(0)
                         n_associations.append(0)
-                
-                bars = ax3.bar(x + i * width - width/2, recovery_rates, width, 
-                              label=method, color=method_colors.get(method, 'gray'), alpha=0.8)
-                
+
+                recovery_means_by_method[method] = recovery_rates
+                recovery_stderrs_by_method[method] = recovery_stderrs
+
+                # Position bars based on number of methods
+                if n_methods == 2:
+                    x_positions = x + (i - 0.5) * width
+                elif n_methods == 3:
+                    x_positions = x + (i - 1) * width
+                else:
+                    x_positions = x + i * width - width * (n_methods - 1) / 2
+
+                bars = ax3.bar(x_positions, recovery_rates, width,
+                              yerr=recovery_stderrs, capsize=3,
+                              label=method, color=method_colors.get(method, 'gray'), alpha=0.8,
+                              error_kw={'linewidth': 1, 'ecolor': 'black'})
+
                 # Add n annotations (number of associations, not phenotypes)
                 for j, (bar, n_assoc) in enumerate(zip(bars, n_associations)):
                     if n_assoc > 0:
@@ -3300,40 +3550,54 @@ class ComparativeAnalyzer:
                                 f'n={n_assoc}', ha='center', va='bottom', fontsize=8)
             
             # Add significance testing between methods for each bin
-            if len(methods) == 2:
-                for bin_idx, bin_label in enumerate(bin_labels):
-                    m1_data = bin_recovery_data[bin_label][methods[0]]
-                    m2_data = bin_recovery_data[bin_label][methods[1]]
-                    
-                    if len(m1_data) > 0 and len(m2_data) > 0:
-                        if len(m1_data) == len(m2_data) and len(m1_data) >= 3:
-                            # Wilcoxon signed-rank test for paired data
-                            try:
-                                _, p_val = wilcoxon(m1_data, m2_data, alternative='two-sided')
-                            except:
-                                # Fall back to Mann-Whitney U if wilcoxon fails
+            p_values_dict = {}  # Store p-values for textbox
+            if len(methods) >= 2:
+                # Test pairwise comparisons for all method pairs
+                from itertools import combinations
+                for method1, method2 in combinations(methods, 2):
+                    for bin_idx, bin_label in enumerate(bin_labels):
+                        m1_data = bin_recovery_data[bin_label][method1]
+                        m2_data = bin_recovery_data[bin_label][method2]
+
+                        if len(m1_data) > 0 and len(m2_data) > 0:
+                            if len(m1_data) == len(m2_data) and len(m1_data) >= 3:
+                                # Wilcoxon signed-rank test for paired data
+                                try:
+                                    _, p_val = wilcoxon(m1_data, m2_data, alternative='two-sided')
+                                except:
+                                    # Fall back to Mann-Whitney U if wilcoxon fails
+                                    from scipy.stats import mannwhitneyu
+                                    _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
+                            else:
+                                # Mann-Whitney U test for unpaired data
                                 from scipy.stats import mannwhitneyu
                                 _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
-                        else:
-                            # Mann-Whitney U test for unpaired data
-                            from scipy.stats import mannwhitneyu
-                            _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
-                        
-                        # Determine significance symbol
-                        if p_val < 0.001:
-                            sig_symbol = '***'
-                        elif p_val < 0.01:
-                            sig_symbol = '**'
-                        elif p_val < 0.05:
-                            sig_symbol = '*'
-                        else:
-                            sig_symbol = 'ns'
-                        
-                        # Add significance annotation above the bars
-                        y_max = max([bin_summary[(bin_summary['bin'] == bin_label) & 
-                                                (bin_summary['method'].isin(methods))]['overall_recovery_rate'].max(),
-                                   5])  # At least 5 for visibility
-                        ax3.text(bin_idx, y_max + 8, sig_symbol, ha='center', fontsize=10, fontweight='bold')
+
+                            # Store p-value for textbox
+                            comparison_name = f"{bin_label}: {method1[:3]} vs {method2[:3]}"
+                            p_values_dict[comparison_name] = p_val
+
+                            # For main comparison (first two methods), add significance symbols
+                            if method1 == methods[0] and method2 == methods[1]:
+                                # Determine significance symbol
+                                if p_val < 0.001:
+                                    sig_symbol = '***'
+                                elif p_val < 0.01:
+                                    sig_symbol = '**'
+                                elif p_val < 0.05:
+                                    sig_symbol = '*'
+                                else:
+                                    sig_symbol = 'ns'
+
+                                # Add significance annotation above the bars
+                                y_max = max([bin_summary[(bin_summary['bin'] == bin_label) &
+                                                        (bin_summary['method'].isin(methods))]['overall_recovery_rate'].max(),
+                                           5])  # At least 5 for visibility
+                                ax3.text(bin_idx, y_max + 8, sig_symbol, ha='center', fontsize=10, fontweight='bold')
+
+            # Add p-value textbox
+            if p_values_dict:
+                self._add_pvalue_textbox(ax3, p_values_dict, position='upper left')
             
             ax3.set_xticks(x)
             ax3.set_xticklabels(bin_labels)
@@ -3347,12 +3611,12 @@ class ComparativeAnalyzer:
         ax4.set_title('Continuous Phenotypes: Overall Recovery Rate by Association Count', fontweight='bold', fontsize=14)
         ax4.set_xlabel('Number of Significant Associations in Truth Data (binned)', fontsize=12)
         ax4.set_ylabel('Overall Recovery Rate (%)', fontsize=12)
-        
+
         if not continuous_df.empty:
-            # Bin the data
-            continuous_df['bin'] = pd.cut(continuous_df['n_truth_sig'], bins=bins, 
+            # Bin the data using same bins as binary
+            continuous_df['bin'] = pd.cut(continuous_df['n_truth_sig'], bins=bins,
                                           labels=bin_labels, include_lowest=True)
-            
+
             # Calculate overall recovery rate per bin per method
             bin_summary_cont = continuous_df.groupby(['bin', 'method']).agg({
                 'n_retained': 'sum',  # Total retained hits in imputed data
@@ -3362,15 +3626,19 @@ class ComparativeAnalyzer:
             bin_summary_cont['overall_recovery_rate'] = (bin_summary_cont['n_retained'] / bin_summary_cont['n_truth_sig']) * 100
             # Count total number of associations (not unique phenotypes) in each bin
             bin_summary_cont['n_associations'] = continuous_df.groupby(['bin', 'method']).size().values
-            
-            # Plot grouped bars - only imputed methods
+
+            # Plot grouped bars - include Method 3 if available
             all_methods_cont = sorted(continuous_df['method'].unique())
-            # Only use first two methods (method1 and method2)
+            # Include method1, method2, and method3 (if available)
             methods_to_plot_cont = [data.method1_name, data.method2_name]
+            if data.method3_name and data.method3_name in all_methods_cont:
+                methods_to_plot_cont.append(data.method3_name)
             methods_cont = [m for m in methods_to_plot_cont if m in all_methods_cont]
-            
+
             x = np.arange(len(bin_labels))
-            width = 0.35  # Width for 2 bars
+            # Adjust width based on number of methods
+            n_methods_cont = len(methods_cont)
+            width = 0.8 / n_methods_cont  # Dynamic width based on number of methods
             
             # Store recovery data for significance testing
             bin_recovery_data_cont = {bin_label: {method: [] for method in methods_cont} for bin_label in bin_labels}
@@ -3383,24 +3651,50 @@ class ComparativeAnalyzer:
                     if not method_phenos.empty:
                         bin_recovery_data_cont[bin_label][method] = method_phenos['retention_rate'].values * 100
             
-            # Plot imputed methods
+            # Calculate mean recovery rates and standard errors for each bin/method
+            recovery_means_by_method_cont = {}
+            recovery_stderrs_by_method_cont = {}
+
+            # Plot imputed methods with error bars
             for i, method in enumerate(methods_cont):
                 method_data = bin_summary_cont[bin_summary_cont['method'] == method]
                 # Ensure all bins are represented
                 recovery_rates = []
+                recovery_stderrs = []
                 n_associations = []
                 for bin_label in bin_labels:
                     bin_data = method_data[method_data['bin'] == bin_label]
                     if not bin_data.empty:
                         recovery_rates.append(bin_data['overall_recovery_rate'].values[0])
                         n_associations.append(bin_data['n_associations'].values[0])
+                        # Calculate standard error for this bin
+                        individual_rates = bin_recovery_data_cont[bin_label][method]
+                        if len(individual_rates) > 1:
+                            stderr = np.std(individual_rates, ddof=1) / np.sqrt(len(individual_rates))
+                            recovery_stderrs.append(stderr)
+                        else:
+                            recovery_stderrs.append(0)
                     else:
                         recovery_rates.append(0)
+                        recovery_stderrs.append(0)
                         n_associations.append(0)
-                
-                bars = ax4.bar(x + i * width - width/2, recovery_rates, width, 
-                              label=method, color=method_colors.get(method, 'gray'), alpha=0.8)
-                
+
+                recovery_means_by_method_cont[method] = recovery_rates
+                recovery_stderrs_by_method_cont[method] = recovery_stderrs
+
+                # Position bars based on number of methods
+                if n_methods_cont == 2:
+                    x_positions = x + (i - 0.5) * width
+                elif n_methods_cont == 3:
+                    x_positions = x + (i - 1) * width
+                else:
+                    x_positions = x + i * width - width * (n_methods_cont - 1) / 2
+
+                bars = ax4.bar(x_positions, recovery_rates, width,
+                              yerr=recovery_stderrs, capsize=3,
+                              label=method, color=method_colors.get(method, 'gray'), alpha=0.8,
+                              error_kw={'linewidth': 1, 'ecolor': 'black'})
+
                 # Add n annotations (number of associations, not phenotypes)
                 for j, (bar, n_assoc) in enumerate(zip(bars, n_associations)):
                     if n_assoc > 0:
@@ -3409,40 +3703,54 @@ class ComparativeAnalyzer:
                                 f'n={n_assoc}', ha='center', va='bottom', fontsize=8)
             
             # Add significance testing between methods for each bin
-            if len(methods_cont) == 2:
-                for bin_idx, bin_label in enumerate(bin_labels):
-                    m1_data = bin_recovery_data_cont[bin_label][methods_cont[0]]
-                    m2_data = bin_recovery_data_cont[bin_label][methods_cont[1]]
-                    
-                    if len(m1_data) > 0 and len(m2_data) > 0:
-                        if len(m1_data) == len(m2_data) and len(m1_data) >= 3:
-                            # Wilcoxon signed-rank test for paired data
-                            try:
-                                _, p_val = wilcoxon(m1_data, m2_data, alternative='two-sided')
-                            except:
-                                # Fall back to Mann-Whitney U if wilcoxon fails
+            p_values_dict_cont = {}  # Store p-values for textbox
+            if len(methods_cont) >= 2:
+                # Test pairwise comparisons for all method pairs
+                from itertools import combinations
+                for method1, method2 in combinations(methods_cont, 2):
+                    for bin_idx, bin_label in enumerate(bin_labels):
+                        m1_data = bin_recovery_data_cont[bin_label][method1]
+                        m2_data = bin_recovery_data_cont[bin_label][method2]
+
+                        if len(m1_data) > 0 and len(m2_data) > 0:
+                            if len(m1_data) == len(m2_data) and len(m1_data) >= 3:
+                                # Wilcoxon signed-rank test for paired data
+                                try:
+                                    _, p_val = wilcoxon(m1_data, m2_data, alternative='two-sided')
+                                except:
+                                    # Fall back to Mann-Whitney U if wilcoxon fails
+                                    from scipy.stats import mannwhitneyu
+                                    _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
+                            else:
+                                # Mann-Whitney U test for unpaired data
                                 from scipy.stats import mannwhitneyu
                                 _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
-                        else:
-                            # Mann-Whitney U test for unpaired data
-                            from scipy.stats import mannwhitneyu
-                            _, p_val = mannwhitneyu(m1_data, m2_data, alternative='two-sided')
-                        
-                        # Determine significance symbol
-                        if p_val < 0.001:
-                            sig_symbol = '***'
-                        elif p_val < 0.01:
-                            sig_symbol = '**'
-                        elif p_val < 0.05:
-                            sig_symbol = '*'
-                        else:
-                            sig_symbol = 'ns'
-                        
-                        # Add significance annotation above the bars
-                        y_max = max([bin_summary_cont[(bin_summary_cont['bin'] == bin_label) & 
-                                                      (bin_summary_cont['method'].isin(methods_cont))]['overall_recovery_rate'].max(),
-                                   5])  # At least 5 for visibility
-                        ax4.text(bin_idx, y_max + 8, sig_symbol, ha='center', fontsize=10, fontweight='bold')
+
+                            # Store p-value for textbox
+                            comparison_name = f"{bin_label}: {method1[:3]} vs {method2[:3]}"
+                            p_values_dict_cont[comparison_name] = p_val
+
+                            # For main comparison (first two methods), add significance symbols
+                            if method1 == methods_cont[0] and method2 == methods_cont[1]:
+                                # Determine significance symbol
+                                if p_val < 0.001:
+                                    sig_symbol = '***'
+                                elif p_val < 0.01:
+                                    sig_symbol = '**'
+                                elif p_val < 0.05:
+                                    sig_symbol = '*'
+                                else:
+                                    sig_symbol = 'ns'
+
+                                # Add significance annotation above the bars
+                                y_max = max([bin_summary_cont[(bin_summary_cont['bin'] == bin_label) &
+                                                              (bin_summary_cont['method'].isin(methods_cont))]['overall_recovery_rate'].max(),
+                                           5])  # At least 5 for visibility
+                                ax4.text(bin_idx, y_max + 8, sig_symbol, ha='center', fontsize=10, fontweight='bold')
+
+            # Add p-value textbox
+            if p_values_dict_cont:
+                self._add_pvalue_textbox(ax4, p_values_dict_cont, position='upper left')
             
             ax4.set_xticks(x)
             ax4.set_xticklabels(bin_labels)

@@ -76,6 +76,7 @@ python scripts/feature_importance_analysis.py \
     --network_layout spring \
     --threshold_method absolute_importance \
     --ppi_reference data/filtered_both_ppi_network.tsv \
+    --skip_cliques \
     --threshold_params 0.005477
     --threshold_params 0.03 \
 
