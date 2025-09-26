@@ -1456,7 +1456,115 @@ class CispQTLAnalyzer:
         score = int(neg_log_p * 100)
         
         return min(max_score, max(0, score))
-    
+
+    def identify_outliers(self, x_values, y_values, labels=None, n_outliers=5, method='residual'):
+        """Identify outliers in a scatter plot.
+
+        Args:
+            x_values: X-axis values
+            y_values: Y-axis values
+            labels: Labels for each point (e.g., assoc_id)
+            n_outliers: Number of outliers to identify
+            method: 'residual' (distance from regression line) or 'discrepancy' (|x-y| difference)
+
+        Returns:
+            Dict with outlier indices, coordinates, and labels
+        """
+        if len(x_values) == 0 or len(y_values) == 0:
+            return {'indices': [], 'x': [], 'y': [], 'labels': []}
+
+        x = np.array(x_values)
+        y = np.array(y_values)
+
+        # Remove any inf or nan values
+        valid_mask = np.isfinite(x) & np.isfinite(y)
+        x_clean = x[valid_mask]
+        y_clean = y[valid_mask]
+
+        if len(x_clean) < n_outliers:
+            return {'indices': [], 'x': [], 'y': [], 'labels': []}
+
+        if method == 'residual':
+            # Calculate residuals from regression line
+            if len(x_clean) > 1:
+                z = np.polyfit(x_clean, y_clean, 1)
+                p = np.poly1d(z)
+                predicted = p(x_clean)
+                residuals = np.abs(y_clean - predicted)
+            else:
+                residuals = np.zeros_like(x_clean)
+        else:  # method == 'discrepancy'
+            # Calculate absolute difference between x and y
+            residuals = np.abs(x_clean - y_clean)
+
+        # Find top n outliers
+        n_outliers = min(n_outliers, len(residuals))
+        outlier_indices = np.argpartition(residuals, -n_outliers)[-n_outliers:]
+        outlier_indices = outlier_indices[np.argsort(-residuals[outlier_indices])]
+
+        # Get original indices (accounting for removed invalid values)
+        original_indices = np.where(valid_mask)[0]
+        final_indices = original_indices[outlier_indices]
+
+        result = {
+            'indices': final_indices.tolist(),
+            'x': x[final_indices].tolist(),
+            'y': y[final_indices].tolist(),
+            'labels': []
+        }
+
+        if labels is not None:
+            if isinstance(labels, (list, np.ndarray)):
+                result['labels'] = [labels[i] for i in final_indices]
+            elif hasattr(labels, 'iloc'):  # pandas Series
+                result['labels'] = labels.iloc[final_indices].tolist()
+
+        return result
+
+    def add_outlier_annotations(self, ax, outliers, fontsize=7, arrow_props=None):
+        """Add text annotations for outliers to a plot.
+
+        Args:
+            ax: Matplotlib axis object
+            outliers: Dict with outlier info from identify_outliers()
+            fontsize: Font size for annotations
+            arrow_props: Dict with arrow properties for annotations
+        """
+        if arrow_props is None:
+            arrow_props = dict(arrowstyle='->', lw=0.5, color='red', alpha=0.7)
+
+        for i, (x, y, label) in enumerate(zip(outliers['x'], outliers['y'], outliers['labels'])):
+            if label:
+                # Parse the label format: "phenotype_id:variant_id"
+                # where variant_id is "chr:position" (e.g., "TSLP:5:110622653")
+                if ':' in label:
+                    # Find the first colon to separate phenotype from variant
+                    first_colon_idx = label.index(':')
+                    phenotype = label[:first_colon_idx]
+                    variant = label[first_colon_idx + 1:]  # This preserves "chr:position" format
+
+                    # Format the display label nicely on two lines
+                    # Example: "TSLP" and "5:110622653" -> "TSLP\n5:110622653"
+                    display_label = f"{phenotype}\n{variant}"
+                else:
+                    display_label = label
+
+                # Adjust text position to avoid overlaps
+                # Use different offsets for different outliers
+                offsets = [(15, 15), (-40, 15), (15, -25), (-40, -25), (25, 0)]
+                offset = offsets[i % len(offsets)]
+
+                ax.annotate(display_label,
+                           xy=(x, y),
+                           xytext=offset,
+                           textcoords='offset points',
+                           fontsize=fontsize,
+                           color='darkred',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7, edgecolor='red', linewidth=0.5),
+                           arrowprops=arrow_props,
+                           ha='center',
+                           va='center')
+
     def plot_pval_slope_comparison(self, data: pQTLData) -> plt.Figure:
         """Create combined p-value, slope, and chi-square comparison plots using density visualization.
         
@@ -1536,45 +1644,64 @@ class CispQTLAnalyzer:
             
             truth_pvals = merged_pval['pval_nominal_truth'].values
             method_pvals = merged_pval['pval_nominal_method'].values
-            
+            assoc_ids = merged_pval['assoc_id'].values  # Keep assoc_id for labeling
+
             if len(truth_pvals) > 0:
                 # Convert to numpy arrays and add small epsilon to avoid log(0)
                 truth_pvals = np.array(truth_pvals) + 1e-300
                 method_pvals = np.array(method_pvals) + 1e-300
-                
+
                 # Calculate correlation
                 pearson_r, _ = pearsonr(np.log10(truth_pvals), np.log10(method_pvals))
-                
+
                 # Create hexbin density plot on log scale
                 # Use hexbin for better visualization of overlapping points
                 # Use log scale for bins to better show density range
-                hb1 = ax1.hexbin(truth_pvals, method_pvals, 
+                hb1 = ax1.hexbin(truth_pvals, method_pvals,
                                  xscale='log', yscale='log',
                                  gridsize=50, cmap='Blues', mincnt=1,
                                  norm=LogNorm(), edgecolors='none', linewidths=0)
-                
+
                 # Add colorbar for density (log scale)
                 cb1 = plt.colorbar(hb1, ax=ax1)
                 cb1.set_label('Count (log scale)', fontsize=8)
-                
+
                 # Add significance threshold lines
-                ax1.axhline(y=self.significance_threshold, color='red', linestyle='--', 
+                ax1.axhline(y=self.significance_threshold, color='red', linestyle='--',
                           alpha=0.7, linewidth=1.5, label=f'p={self.significance_threshold}')
-                ax1.axvline(x=self.significance_threshold, color='red', linestyle='--', 
+                ax1.axvline(x=self.significance_threshold, color='red', linestyle='--',
                           alpha=0.7, linewidth=1.5)
-                
+
                 # Note: log scale already set by hexbin
-                
+
                 # Labels and title
                 ax1.set_xlabel('Truth p-value')
                 ax1.set_ylabel(f'{method_name} p-value')
                 ax1.set_title(f'{method_name}\nP-value Comparison')
-                
+
                 # Add statistics text
                 ax1.text(0.05, 0.95, f'n = {len(truth_pvals)}\nr = {pearson_r:.3f}',
                         transform=ax1.transAxes, fontsize=10, verticalalignment='top',
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
-                
+
+                # Identify and label outliers for p-value panel
+                # Use log-transformed p-values for outlier detection
+                log_truth_pvals = np.log10(truth_pvals)
+                log_method_pvals = np.log10(method_pvals)
+                outliers_pval = self.identify_outliers(
+                    log_truth_pvals, log_method_pvals,
+                    labels=assoc_ids,
+                    n_outliers=4,
+                    method='residual'
+                )
+
+                # Convert back to original scale for plotting
+                outliers_pval['x'] = [10**x for x in outliers_pval['x']]
+                outliers_pval['y'] = [10**y for y in outliers_pval['y']]
+
+                # Add outlier annotations
+                self.add_outlier_annotations(ax1, outliers_pval, fontsize=6)
+
                 ax1.grid(True, alpha=0.3)
             
             # Panel 2: Slope comparison (hits passing both p-value and MAF cutoffs)
@@ -1585,54 +1712,70 @@ class CispQTLAnalyzer:
                 effect_data = data.effect_size_analysis[method]
                 truth_slopes = effect_data['truth_slopes']
                 method_slopes = effect_data['method_slopes']
-                
-                
+                common_assocs = effect_data.get('common_assocs', None)
+
                 if len(truth_slopes) > 0 and len(method_slopes) > 0:
                     # Use the pre-computed statistics from effect_data
                     pearson_r = effect_data.get('pearson_r', 0)
                     spearman_r = effect_data.get('spearman_r', 0)
                     mae = effect_data.get('mae', 0)
                     n_clean = effect_data.get('n_clean', len(truth_slopes))
-                    
+
                     # Create hexbin density plot for slopes with log-scale density
                     # Check if we need to handle negative values for slopes
                     min_val = min(np.min(truth_slopes), np.min(method_slopes))
                     max_val = max(np.max(truth_slopes), np.max(method_slopes))
-                    
-                    hb2 = ax2.hexbin(truth_slopes, method_slopes, 
+
+                    hb2 = ax2.hexbin(truth_slopes, method_slopes,
                                     gridsize=40, cmap='Oranges', mincnt=1,
                                     norm=LogNorm(), edgecolors='none', linewidths=0,
                                     extent=[min_val, max_val, min_val, max_val])
-                    
+
                     # Add colorbar for density (log scale)
                     cb2 = plt.colorbar(hb2, ax=ax2)
                     cb2.set_label('Count (log scale)', fontsize=8)
-                    
-                    # Add regression line
-                    
+
                     # Add regression line
                     if len(truth_slopes) > 1:
                         z = np.polyfit(truth_slopes, method_slopes, 1)
                         p = np.poly1d(z)
                         x_line = np.linspace(np.min(truth_slopes), np.max(truth_slopes), 100)
-                        ax2.plot(x_line, p(x_line), color='red', linewidth=1.5, 
+                        ax2.plot(x_line, p(x_line), color='red', linewidth=1.5,
                                alpha=0.8, label='Regression line')
-                    
+
                     # Labels and title
                     ax2.set_xlabel('Truth Effect Size (slope)')
                     ax2.set_ylabel(f'{method_name} Effect Size (slope)')
                     ax2.set_title(f'{method_name}\nSlope Comparison (p<{self.significance_threshold})')
-                    
+
                     # Add statistics text
                     stats_text = f'n = {n_clean}\n'
                     stats_text += f'Pearson r = {pearson_r:.3f}\n'
                     stats_text += f'Spearman ρ = {spearman_r:.3f}\n'
                     stats_text += f'MAE = {mae:.3f}'
-                    
+
                     ax2.text(0.05, 0.95, stats_text,
                             transform=ax2.transAxes, fontsize=9, verticalalignment='top',
                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
-                    
+
+                    # Identify and label outliers for slope panel
+                    # Create labels from common_assocs if available
+                    if common_assocs is not None and hasattr(common_assocs, '__iter__'):
+                        # Convert to list if it's an Index or array-like object
+                        assoc_labels = list(common_assocs) if len(common_assocs) == len(truth_slopes) else None
+                    else:
+                        assoc_labels = None
+
+                    outliers_slope = self.identify_outliers(
+                        truth_slopes, method_slopes,
+                        labels=assoc_labels,
+                        n_outliers=4,
+                        method='residual'
+                    )
+
+                    # Add outlier annotations
+                    self.add_outlier_annotations(ax2, outliers_slope, fontsize=6)
+
                     ax2.legend(loc='lower right', fontsize=9)
                     ax2.grid(True, alpha=0.3)
                 else:
@@ -1680,35 +1823,37 @@ class CispQTLAnalyzer:
                     if len(merged_chi2) > 0:
                         truth_chi2 = merged_chi2['chi2_truth'].values
                         method_chi2 = merged_chi2['chi2_method'].values
-                        
+                        assoc_ids_chi2 = merged_chi2['assoc_id'].values  # Keep assoc_id for labeling
+
                         # Remove inf and nan values
                         valid_mask = np.isfinite(truth_chi2) & np.isfinite(method_chi2)
                         truth_chi2_clean = truth_chi2[valid_mask]
                         method_chi2_clean = method_chi2[valid_mask]
-                        
+                        assoc_ids_chi2_clean = assoc_ids_chi2[valid_mask]  # Filter labels too
+
                         if len(truth_chi2_clean) > 0:
                             # Calculate statistics
                             pearson_r, _ = pearsonr(truth_chi2_clean, method_chi2_clean)
                             spearman_r, _ = spearmanr(truth_chi2_clean, method_chi2_clean)
                             mae = np.mean(np.abs(truth_chi2_clean - method_chi2_clean))
-                            
+
                             # Create hexbin density plot
                             min_val = min(np.min(truth_chi2_clean), np.min(method_chi2_clean))
                             max_val = max(np.max(truth_chi2_clean), np.max(method_chi2_clean))
-                            
+
                             hb3 = ax3.hexbin(truth_chi2_clean, method_chi2_clean,
                                            gridsize=40, cmap='Greens', mincnt=1,
                                            norm=LogNorm(), edgecolors='none', linewidths=0,
                                            extent=[min_val, max_val, min_val, max_val])
-                            
+
                             # Add colorbar
                             cb3 = plt.colorbar(hb3, ax=ax3)
                             cb3.set_label('Count (log scale)', fontsize=8)
-                            
+
                             # Add diagonal reference line
                             ax3.plot([min_val, max_val], [min_val, max_val],
                                    'k--', alpha=0.5, linewidth=1.5, label='Perfect concordance')
-                            
+
                             # Add regression line
                             if len(truth_chi2_clean) > 1:
                                 z = np.polyfit(truth_chi2_clean, method_chi2_clean, 1)
@@ -1716,22 +1861,33 @@ class CispQTLAnalyzer:
                                 x_line = np.linspace(np.min(truth_chi2_clean), np.max(truth_chi2_clean), 100)
                                 ax3.plot(x_line, p(x_line), color='red', linewidth=1.5,
                                        alpha=0.8, label='Regression line')
-                            
+
                             # Labels and title
                             ax3.set_xlabel('Truth Chi-square')
                             ax3.set_ylabel(f'{method_name} Chi-square')
                             ax3.set_title(f'{method_name}\nChi-square Comparison (MAF-filtered)')
-                            
+
                             # Add statistics text
                             stats_text = f'n = {len(truth_chi2_clean)}\n'
                             stats_text += f'Pearson r = {pearson_r:.3f}\n'
                             stats_text += f'Spearman ρ = {spearman_r:.3f}\n'
                             stats_text += f'MAE = {mae:.3f}'
-                            
+
                             ax3.text(0.05, 0.95, stats_text,
                                    transform=ax3.transAxes, fontsize=9, verticalalignment='top',
                                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
-                            
+
+                            # Identify and label outliers for chi-square panel
+                            outliers_chi2 = self.identify_outliers(
+                                truth_chi2_clean, method_chi2_clean,
+                                labels=assoc_ids_chi2_clean,
+                                n_outliers=4,
+                                method='residual'
+                            )
+
+                            # Add outlier annotations
+                            self.add_outlier_annotations(ax3, outliers_chi2, fontsize=6)
+
                             ax3.legend(loc='lower right', fontsize=9)
                             ax3.grid(True, alpha=0.3)
                         else:
